@@ -1,36 +1,55 @@
-import psycopg2
-from psycopg2 import OperationalError  # Import the error class
+import asyncpg
+import asyncio
+
 
 class Database:
     def __init__(self, dsn):
-        self.dsn = dsn  # Data Source Name contains all the database parameters
-
-    def connect(self):
-        self.connection = psycopg2.connect(self.dsn)
-        self.cursor = self.connection.cursor()
-
-    def close(self):
-        self.cursor.close()
-        self.connection.close()
-
-    def get_player_by_id(self, playerid):
-        self.cursor.execute("SELECT * FROM players WHERE id = %s", (playerid,))
-        return self.cursor.fetchone()
+        self.dsn = dsn
+        self.pool = None
+        
     
+
+    async def connect(self):
+        self.pool = await asyncpg.create_pool(dsn=self.dsn)
+
+    async def close(self):
+        await self.pool.close()
+
+    async def create_pool(self):
+        print("DSN being used:", self.dsn)
+        self.pool = await asyncpg.create_pool(self.dsn)
     async def fetch_races(self):
-        query = "SELECT id, name, description FROM races"  # Adjust the table and column names as necessary
-        try:
-            self.cursor.execute(query)
-            races = self.cursor.fetchall()
-            return [{'id': race[0], 'name': race[1], 'description': race[2]} for race in races]
-        except Exception as e:
-            print(f"Error fetching races: {e}")
-            return []
+        if self.pool is None:
+            await self.create_pool()  # Make sure the pool is created before using it
+
+        async with self.pool.acquire() as conn:
+            races = await conn.fetch('SELECT raceid, name FROM races ORDER BY raceid')
+            return races
+
+        await conn.execute(
+            """
+         INSERT INTO player_data (playerid, raceid) VALUES ($1, $2)
+         ON CONFLICT (playerid) DO UPDATE SET raceid = EXCLUDED.raceid
+            """,
+            discord_id,  # Use integer directly
+            race_id
+)
+        
 
     # ... additional methods for other database interactions
+async def main():
+    # Replace with your actual DSN
+    db = Database(dsn="postgresql://postgres:Oshirothegreat9@localhost:5432/BMOSRPG")
+    await db.connect()
+    # Example usage
+    races = await db.fetch_races()
+    print(races)
+    await db.close()
 
-# Initialize your Database instance with the correct DSN
-db = Database(dsn="dbname='BMOSRPG' user='postgres' host='localhost' password='Oshirothegreat9' port='5432'")
+if __name__ == "__main__":
+    asyncio.run(main())
+    
+
 
 # Use the Database class to connect and run a test query take out 3 quotes to run on each side
 '''

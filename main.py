@@ -11,9 +11,14 @@ TOKEN = 'MTE3Nzc3MjcyNDE1MjY5Njg1Mg.GmEncj.q1k72hSszveLmlOLde-I1XVvVPAFLBlQAJdKX
 
 bot = Client(token=TOKEN)
 
-# Use the alias you've defined for the setup function
-cc_setup(bot)  # This should match the imported alias
+DATABASE_DSN = "dbname='BMOSRPG' user='postgres' host='localhost' password='your_password' port='5432'"
 
+db = Database(dsn=DATABASE_DSN)
+
+
+logging.info("Loading extensions...")
+# When setting up the bot, make sure the CharacterCreation class is defined to accept a bot and a db instance
+cc_setup(bot)  # Pass both the bot and db instances to the setup function
 
 # Event listener for when the bot has switched from offline to online.
 @bot.event
