@@ -32,14 +32,20 @@ class CharacterCreation(Extension):
         await ctx.send("Please select your character's race:", components=components)
 
     # You will use a decorator from interactions to handle button clicks
-    @component_callback(re.compile(r"select_race_\d+"))  # Regex pattern to match custom_id like 'select_race_1', 'select_race_2', etc.
+    @component_callback(re.compile(r"select_race_\d+"))
     async def race_button_handler(self, ctx: ComponentContext):
         # Extract race ID from the custom_id of the button clicked
-        race_id = int(ctx.custom_id.split('_')[-1])
-        # Save the player's Discord ID and race ID to the database
-        await self.db.save_player_choice(ctx.author.id, race_id)
-        # Respond to the button click
-        await ctx.send(f"You have chosen race ID: {race_id}", ephemeral=True)
+        raceid = int(ctx.custom_id.split('_')[-1])
+        # Extract the player's Discord ID from the context
+        discord_id = ctx.author.id
+    
+        # Save the player's race choice in the database
+        await self.db.save_player_choice(discord_id, raceid)
+    
+        # Send confirmation to the player
+        await ctx.send(f"You have chosen race ID: {raceid}", ephemeral=True)
+        
+    
 # Don't forget to add the setup function
 # charactercreation.py
 def setup(bot):
