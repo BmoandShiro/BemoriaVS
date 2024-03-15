@@ -35,47 +35,46 @@ class Database:
             raceid
 )
     async def save_player_choice(self, discord_id, raceid):
+        # Acquire a connection from the pool
         async with self.pool.acquire() as conn:
-            # Check if the player exists
-            player_exists = await conn.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM players WHERE discord_id = $1)",
-                discord_id
-            )
-        
-            # If the player doesn't exist, insert them into the players table
-            if not player_exists:
-                await conn.execute(
-                    "INSERT INTO players (discord_id) VALUES ($1)",
-                    discord_id
-                )
-        
-            # Update or insert the player's race selection
-            await conn.execute(
-                """
-                INSERT INTO player_data (discord_id, raceid) VALUES ($1, $2)
-                ON CONFLICT (discord_id) DO UPDATE SET raceid = EXCLUDED.raceid
-                """,
-                discord_id, raceid
-            )
+            # Ensure the player exists and get the playerid
+            player_id = await conn.fetchval("""
+                INSERT INTO players (discord_id)
+                VALUES ($1)
+                ON CONFLICT (discord_id) DO NOTHING
+                RETURNING playerid;
+            """, discord_id)
+
+            # If player_id is None, it means the player already exists; fetch the existing playerid
+            if player_id is None:
+                player_id = await conn.fetchval("SELECT playerid FROM players WHERE discord_id = $1", discord_id)
+
+            # Insert or update player's race choice
+            await conn.execute("""
+                INSERT INTO player_data (playerid, raceid)
+                VALUES ($1, $2)
+                ON CONFLICT (playerid) DO UPDATE
+                SET raceid = EXCLUDED.raceid;
+            """, player_id, raceid)
 
 
             
-    async def get_or_create_player(self, discord_id):
-        async with self.pool.acquire() as conn:
-            # Try to get the player by Discord ID
-            player = await conn.fetchrow(
-                "SELECT playerid FROM players WHERE discord_id = $1",
-                discord_id
-            )
-            if player:
-                return player['playerid']
-            else:
-                # If not found, insert the new player and return the new ID
-                player_id = await conn.fetchval(
-                    "INSERT INTO players (discord_id) VALUES ($1) RETURNING playerid",
+        async def get_or_create_player(self, discord_id):
+            async with self.pool.acquire() as conn:
+                # Try to get the player by Discord ID
+                player = await conn.fetchrow(
+                    "SELECT playerid FROM players WHERE discord_id = $1",
                     discord_id
                 )
-                return player_id    
+                if player:
+                    return player['playerid']
+                else:
+                    # If not found, insert the new player and return the new ID
+                    playerid = await conn.fetchval(
+                        "INSERT INTO players (discord_id) VALUES ($1) RETURNING playerid",
+                        discord_id
+                    )
+                    return playerid    
 
     # ... additional methods for other database interactions
 async def main():
@@ -85,7 +84,7 @@ async def main():
     # Example usage
     races = await db.fetch_races()
     print(races)
-    await db.save_player_choice(discord_id, race_id)
+    await db.save_player_choice(discord_id, raceid)
     await db.close()
 
 if __name__ == "__main__":
