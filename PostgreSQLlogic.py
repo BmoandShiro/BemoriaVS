@@ -32,8 +32,13 @@ class Database:
          ON CONFLICT (playerid) DO UPDATE SET raceid = EXCLUDED.raceid
             """,
             discord_id,  # Use integer directly
-            raceid
-)
+            raceid)
+            
+    async def fetch_background_titles(self):
+        async with self.pool.acquire() as conn:
+            titles = await conn.fetch('SELECT titleid, titlename FROM titles WHERE background = true ORDER BY titleid')
+            return titles
+
     async def save_player_choice(self, discord_id, raceid):
         # Acquire a connection from the pool
         async with self.pool.acquire() as conn:
@@ -57,6 +62,7 @@ class Database:
                 SET raceid = EXCLUDED.raceid;
             """, player_id, raceid)
 
+    
 
             
         async def get_or_create_player(self, discord_id):
@@ -75,6 +81,22 @@ class Database:
                         discord_id
                     )
                     return playerid    
+                
+    async def save_player_title_choice(self, discord_id, titleid):
+        # Acquire a connection from the pool
+        async with self.pool.acquire() as conn:
+            # Fetch the player's id from the players table using discord_id
+            player_id = await conn.fetchval("""
+                SELECT playerid FROM players WHERE discord_id = $1
+            """, discord_id)
+
+            # Insert or update the player's title choice in player_titles table
+            await conn.execute("""
+                INSERT INTO player_titles (playerid, titleid, is_active)
+                VALUES ($1, $2, true)
+                ON CONFLICT (playerid, titleid) DO UPDATE
+                SET is_active = EXCLUDED.is_active;
+            """, player_id, titleid)
 
     # ... additional methods for other database interactions
 async def main():
@@ -90,7 +112,7 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
     
-
+    
 
 # Use the Database class to connect and run a test query take out 3 quotes to run on each side
 '''

@@ -45,7 +45,41 @@ class CharacterCreation(Extension):
         # Send confirmation to the player
         await ctx.send(f"You have chosen race ID: {raceid}", ephemeral=True)
         
+        # Fetch background titles from your database
+        titles = await self.db.fetch_background_titles()
+        # Create a button for each title
+        title_buttons = [
+            Button(style=ButtonStyle.PRIMARY, label=title['titlename'], custom_id=f"select_title_{title['titleid']}")
+            for title in titles
+        ]
+        # Group buttons into action rows if needed
+        title_components = [ActionRow(*title_buttons[i:i+5]) for i in range(0, len(title_buttons), 5)]
+        await ctx.send("Please select your character's title:", components=title_components)
     
+    # New handler for title button clicks
+    @component_callback(re.compile(r"select_title_\d+"))
+    async def title_button_handler(self, ctx: ComponentContext):
+        # Extract title ID from the custom_id of the button clicked
+        titleid = int(ctx.custom_id.split('_')[-1])
+        # Extract the player's Discord ID from the context
+        discord_id = ctx.author.id
+        
+        # Save the player's title choice in the database
+        await self.db.save_player_title_choice(discord_id, titleid)
+        await ctx.send(f"You have chosen the title ID: {titleid}", ephemeral=True)
+    
+    # Part of the Database class
+    async def set_initial_location(self, player_id, location_id=2):  # Default location_id for Tradewind City
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE players
+                SET current_location = $2
+                WHERE playerid = $1;
+            """, player_id, location_id)
+
+        # Use this method after the player has finished character creation
+        await db.set_initial_location(player_id)
+        
 # Don't forget to add the setup function
 # charactercreation.py
 def setup(bot):
