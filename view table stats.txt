@@ -1,0 +1,176 @@
+CREATE OR REPLACE VIEW player_stats_view AS
+SELECT
+    pd.playerid,
+	r.raceid,
+    SUM(COALESCE(head.health, 0) + COALESCE(chest.health, 0) + COALESCE(hands.health, 0) + COALESCE(legs.health, 0) +
+        COALESCE(feet.health, 0) + COALESCE(back.health, 0) +
+        COALESCE(neck.health, 0) + COALESCE(finger1.health, 0) +
+        COALESCE(finger2.health, 0) + COALESCE(weapon_hand1.health, 0) +
+        COALESCE(weapon_hand2.health, 0) + COALESCE(r.health, 0)) AS total_health,
+		
+    SUM(COALESCE(head.mana, 0) + COALESCE(chest.mana, 0) + COALESCE(hands.mana, 0) + COALESCE(legs.mana, 0) +
+        COALESCE(feet.mana, 0) + COALESCE(back.mana, 0) +
+        COALESCE(neck.mana, 0) + COALESCE(finger1.mana, 0) +
+        COALESCE(finger2.mana, 0) + COALESCE(weapon_hand1.mana, 0) +
+        COALESCE(weapon_hand2.mana, 0) + COALESCE(r.mana, 0)) AS total_mana,
+		
+    SUM(COALESCE(head.stamina, 0) + COALESCE(chest.stamina, 0) + COALESCE(hands.stamina, 0) + COALESCE(legs.stamina, 0) +
+        COALESCE(feet.stamina, 0) + COALESCE(back.stamina, 0) +
+        COALESCE(neck.stamina, 0) + COALESCE(finger1.stamina, 0) +
+        COALESCE(finger2.stamina, 0) + COALESCE(weapon_hand1.stamina, 0) +
+        COALESCE(weapon_hand2.stamina, 0) + COALESCE(r.stamina, 0)) AS total_stamina,
+
+    SUM(COALESCE(head.strength, 0) + COALESCE(chest.strength, 0) + COALESCE(hands.strength, 0) + COALESCE(legs.strength, 0) +
+        COALESCE(feet.strength, 0) + COALESCE(back.strength, 0) +
+        COALESCE(neck.strength, 0) + COALESCE(finger1.strength, 0) +
+        COALESCE(finger2.strength, 0) + COALESCE(weapon_hand1.strength, 0) +
+        COALESCE(weapon_hand2.strength, 0) + COALESCE(r.strength, 0)) AS total_strength,
+
+	SUM(COALESCE(head.dexterity, 0) + COALESCE(chest.dexterity, 0) + COALESCE(hands.dexterity, 0) + COALESCE(legs.dexterity, 0) +
+        COALESCE(feet.dexterity, 0) + COALESCE(back.dexterity, 0) +
+        COALESCE(neck.dexterity, 0) + COALESCE(finger1.dexterity, 0) +
+        COALESCE(finger2.dexterity, 0) + COALESCE(weapon_hand1.dexterity, 0) +
+        COALESCE(weapon_hand2.dexterity, 0) + COALESCE(r.dexterity, 0)) AS total_dexterity,
+		
+	SUM(COALESCE(head.intelligence, 0) + COALESCE(chest.intelligence, 0) + COALESCE(hands.intelligence, 0) + COALESCE(legs.intelligence, 0) +
+        COALESCE(feet.intelligence, 0) + COALESCE(back.intelligence, 0) +
+        COALESCE(neck.intelligence, 0) + COALESCE(finger1.intelligence, 0) +
+        COALESCE(finger2.intelligence, 0) + COALESCE(weapon_hand1.intelligence, 0) +
+        COALESCE(weapon_hand2.intelligence, 0) + COALESCE(r.intelligence, 0)) AS total_intelligence,
+
+	SUM(COALESCE(head.wisdom, 0) + COALESCE(chest.wisdom, 0) + COALESCE(hands.wisdom, 0) + COALESCE(legs.wisdom, 0) +
+        COALESCE(feet.wisdom, 0) + COALESCE(back.wisdom, 0) +
+        COALESCE(neck.wisdom, 0) + COALESCE(finger1.wisdom, 0) +
+        COALESCE(finger2.wisdom, 0) + COALESCE(weapon_hand1.wisdom, 0) +
+        COALESCE(weapon_hand2.wisdom, 0) + COALESCE(r.wisdom, 0)) AS total_wisdom,
+		
+	SUM(COALESCE(head.agility, 0) + COALESCE(chest.agility, 0) + COALESCE(hands.agility, 0) + COALESCE(legs.agility, 0) +
+        COALESCE(feet.agility, 0) + COALESCE(back.agility, 0) +
+        COALESCE(neck.agility, 0) + COALESCE(finger1.agility, 0) +
+        COALESCE(finger2.agility, 0) + COALESCE(weapon_hand1.agility, 0) +
+        COALESCE(weapon_hand2.agility, 0) + COALESCE(r.agility, 0)) AS total_agility,
+		
+	SUM(COALESCE(head.endurance, 0) + COALESCE(chest.endurance, 0) + COALESCE(hands.endurance, 0) + COALESCE(legs.endurance, 0) +
+        COALESCE(feet.endurance, 0) + COALESCE(back.endurance, 0) +
+        COALESCE(neck.endurance, 0) + COALESCE(finger1.endurance, 0) +
+        COALESCE(finger2.endurance, 0) + COALESCE(weapon_hand1.endurance, 0) +
+        COALESCE(weapon_hand2.endurance, 0) + COALESCE(r.endurance, 0)) AS total_endurance,
+		
+	SUM(COALESCE(head.charisma, 0) + COALESCE(chest.charisma, 0) + COALESCE(hands.charisma, 0) + COALESCE(legs.charisma, 0) +
+        COALESCE(feet.charisma, 0) + COALESCE(back.charisma, 0) +
+        COALESCE(neck.charisma, 0) + COALESCE(finger1.charisma, 0) +
+        COALESCE(finger2.charisma, 0) + COALESCE(weapon_hand1.charisma, 0) +
+        COALESCE(weapon_hand2.charisma, 0) + COALESCE(r.charisma, 0)) AS total_charisma,
+		
+	SUM(COALESCE(head.willpower, 0) + COALESCE(chest.willpower, 0) + COALESCE(hands.willpower, 0) + COALESCE(legs.willpower, 0) +
+        COALESCE(feet.willpower, 0) + COALESCE(back.willpower, 0) +
+        COALESCE(neck.willpower, 0) + COALESCE(finger1.willpower, 0) +
+        COALESCE(finger2.willpower, 0) + COALESCE(weapon_hand1.willpower, 0) +
+        COALESCE(weapon_hand2.willpower, 0) + COALESCE(r.willpower, 0)) AS total_willpower,
+		
+	SUM(COALESCE(head.luck, 0) + COALESCE(chest.luck, 0) + COALESCE(hands.luck, 0) + COALESCE(legs.luck, 0) +
+        COALESCE(feet.luck, 0) + COALESCE(back.luck, 0) +
+        COALESCE(neck.luck, 0) + COALESCE(finger1.luck, 0) +
+        COALESCE(finger2.luck, 0) + COALESCE(weapon_hand1.luck, 0) +
+        COALESCE(weapon_hand2.luck, 0) + COALESCE(r.luck, 0)) AS total_luck,
+		
+	SUM(COALESCE(head.fire_resistance, 0) + COALESCE(chest.fire_resistance, 0) + COALESCE(hands.fire_resistance, 0) + COALESCE(legs.fire_resistance, 0) +
+        COALESCE(feet.fire_resistance, 0) + COALESCE(back.fire_resistance, 0) +
+        COALESCE(neck.fire_resistance, 0) + COALESCE(finger1.fire_resistance, 0) +
+        COALESCE(finger2.fire_resistance, 0) + COALESCE(weapon_hand1.fire_resistance, 0) +
+        COALESCE(weapon_hand2.fire_resistance, 0) + COALESCE(r.fire_resistance, 0)) AS total_fire_resistance,
+		
+	SUM(COALESCE(head.ice_resistance, 0) + COALESCE(chest.ice_resistance, 0) + COALESCE(hands.ice_resistance, 0) + COALESCE(legs.ice_resistance, 0) +
+        COALESCE(feet.ice_resistance, 0) + COALESCE(back.ice_resistance, 0) +
+        COALESCE(neck.ice_resistance, 0) + COALESCE(finger1.ice_resistance, 0) +
+        COALESCE(finger2.ice_resistance, 0) + COALESCE(weapon_hand1.ice_resistance, 0) +
+        COALESCE(weapon_hand2.ice_resistance, 0) + COALESCE(r.ice_resistance, 0)) AS total_ice_resistance,
+
+	SUM(COALESCE(head.lightning_resistance, 0) + COALESCE(chest.lightning_resistance, 0) + COALESCE(hands.lightning_resistance, 0) + COALESCE(legs.lightning_resistance, 0) +
+        COALESCE(feet.lightning_resistance, 0) + COALESCE(back.lightning_resistance, 0) +
+        COALESCE(neck.lightning_resistance, 0) + COALESCE(finger1.lightning_resistance, 0) +
+        COALESCE(finger2.lightning_resistance, 0) + COALESCE(weapon_hand1.lightning_resistance, 0) +
+        COALESCE(weapon_hand2.lightning_resistance, 0) + COALESCE(r.lightning_resistance, 0)) AS total_lightning_resistance,
+
+	SUM(COALESCE(head.poison_resistance, 0) + COALESCE(chest.poison_resistance, 0) + COALESCE(hands.poison_resistance, 0) + COALESCE(legs.poison_resistance, 0) +
+        COALESCE(feet.poison_resistance, 0) + COALESCE(back.poison_resistance, 0) +
+        COALESCE(neck.poison_resistance, 0) + COALESCE(finger1.poison_resistance, 0) +
+        COALESCE(finger2.poison_resistance, 0) + COALESCE(weapon_hand1.poison_resistance, 0) +
+        COALESCE(weapon_hand2.poison_resistance, 0) + COALESCE(r.poison_resistance, 0)) AS total_poison_resistance,
+		
+
+	SUM(COALESCE(head.magic_resistance, 0) + COALESCE(chest.magic_resistance, 0) + COALESCE(hands.magic_resistance, 0) + COALESCE(legs.magic_resistance, 0) +
+        COALESCE(feet.magic_resistance, 0) + COALESCE(back.magic_resistance, 0) +
+        COALESCE(neck.magic_resistance, 0) + COALESCE(finger1.magic_resistance, 0) +
+        COALESCE(finger2.magic_resistance, 0) + COALESCE(weapon_hand1.magic_resistance, 0) +
+        COALESCE(weapon_hand2.magic_resistance, 0) + COALESCE(r.magic_resistance, 0)) AS total_magic_resistance,
+
+	SUM(COALESCE(head.physical_resistance, 0) + COALESCE(chest.physical_resistance, 0) + COALESCE(hands.physical_resistance, 0) + COALESCE(legs.physical_resistance, 0) +
+        COALESCE(feet.physical_resistance, 0) + COALESCE(back.physical_resistance, 0) +
+        COALESCE(neck.physical_resistance, 0) + COALESCE(finger1.physical_resistance, 0) +
+        COALESCE(finger2.physical_resistance, 0) + COALESCE(weapon_hand1.physical_resistance, 0) +
+        COALESCE(weapon_hand2.physical_resistance, 0) + COALESCE(r.physical_resistance, 0)) AS total_physical_resistance,
+		
+	SUM(COALESCE(head.crushing_resistance, 0) + COALESCE(chest.crushing_resistance, 0) + COALESCE(hands.crushing_resistance, 0) + COALESCE(legs.crushing_resistance, 0) +
+        COALESCE(feet.crushing_resistance, 0) + COALESCE(back.crushing_resistance, 0) +
+        COALESCE(neck.crushing_resistance, 0) + COALESCE(finger1.crushing_resistance, 0) +
+        COALESCE(finger2.crushing_resistance, 0) + COALESCE(weapon_hand1.crushing_resistance, 0) +
+        COALESCE(weapon_hand2.crushing_resistance, 0) + COALESCE(r.crushing_resistance, 0)) AS total_crushing_resistance,
+		
+	SUM(COALESCE(head.piercing_resistance, 0) + COALESCE(chest.piercing_resistance, 0) + COALESCE(hands.piercing_resistance, 0) + COALESCE(legs.piercing_resistance, 0) +
+        COALESCE(feet.piercing_resistance, 0) + COALESCE(back.piercing_resistance, 0) +
+        COALESCE(neck.piercing_resistance, 0) + COALESCE(finger1.piercing_resistance, 0) +
+        COALESCE(finger2.piercing_resistance, 0) + COALESCE(weapon_hand1.piercing_resistance, 0) +
+        COALESCE(weapon_hand2.piercing_resistance, 0) + COALESCE(r.piercing_resistance, 0)) AS total_piercing_resistance,
+		
+	SUM(COALESCE(head.water_resistance, 0) + COALESCE(chest.water_resistance, 0) + COALESCE(hands.water_resistance, 0) + COALESCE(legs.water_resistance, 0) +
+        COALESCE(feet.water_resistance, 0) + COALESCE(back.water_resistance, 0) +
+        COALESCE(neck.water_resistance, 0) + COALESCE(finger1.water_resistance, 0) +
+        COALESCE(finger2.water_resistance, 0) + COALESCE(weapon_hand1.water_resistance, 0) +
+        COALESCE(weapon_hand2.water_resistance, 0) + COALESCE(r.water_resistance, 0)) AS total_water_resistance,
+		
+	SUM(COALESCE(head.earth_resistance, 0) + COALESCE(chest.earth_resistance, 0) + COALESCE(hands.earth_resistance, 0) + COALESCE(legs.earth_resistance, 0) +
+        COALESCE(feet.earth_resistance, 0) + COALESCE(back.earth_resistance, 0) +
+        COALESCE(neck.earth_resistance, 0) + COALESCE(finger1.earth_resistance, 0) +
+        COALESCE(finger2.earth_resistance, 0) + COALESCE(weapon_hand1.earth_resistance, 0) +
+        COALESCE(weapon_hand2.earth_resistance, 0) + COALESCE(r.earth_resistance, 0)) AS total_earth_resistance,
+		
+	SUM(COALESCE(head.light_resistance, 0) + COALESCE(chest.light_resistance, 0) + COALESCE(hands.light_resistance, 0) + COALESCE(legs.light_resistance, 0) +
+        COALESCE(feet.light_resistance, 0) + COALESCE(back.light_resistance, 0) +
+        COALESCE(neck.light_resistance, 0) + COALESCE(finger1.light_resistance, 0) +
+        COALESCE(finger2.light_resistance, 0) + COALESCE(weapon_hand1.light_resistance, 0) +
+        COALESCE(weapon_hand2.light_resistance, 0) + COALESCE(r.light_resistance, 0)) AS total_light_resistance,
+
+	SUM(COALESCE(head.dark_resistance, 0) + COALESCE(chest.dark_resistance, 0) + COALESCE(hands.dark_resistance, 0) + COALESCE(legs.dark_resistance, 0) +
+        COALESCE(feet.dark_resistance, 0) + COALESCE(back.dark_resistance, 0) +
+        COALESCE(neck.dark_resistance, 0) + COALESCE(finger1.dark_resistance, 0) +
+        COALESCE(finger2.dark_resistance, 0) + COALESCE(weapon_hand1.dark_resistance, 0) +
+        COALESCE(weapon_hand2.dark_resistance, 0) + COALESCE(r.dark_resistance, 0)) AS total_dark_resistance,
+		
+	SUM(COALESCE(head.air_resistance, 0) + COALESCE(chest.air_resistance, 0) + COALESCE(hands.air_resistance, 0) + COALESCE(legs.air_resistance, 0) +
+        COALESCE(feet.air_resistance, 0) + COALESCE(back.air_resistance, 0) +
+        COALESCE(neck.air_resistance, 0) + COALESCE(finger1.air_resistance, 0) +
+        COALESCE(finger2.air_resistance, 0) + COALESCE(weapon_hand1.air_resistance, 0) +
+        COALESCE(weapon_hand2.air_resistance, 0) + COALESCE(r.air_resistance, 0)) AS total_air_resistance,
+		
+	SUM(COALESCE(head.sleep_resistance, 0) + COALESCE(chest.sleep_resistance, 0) + COALESCE(hands.sleep_resistance, 0) + COALESCE(legs.sleep_resistance, 0) +
+        COALESCE(feet.sleep_resistance, 0) + COALESCE(back.sleep_resistance, 0) +
+        COALESCE(neck.sleep_resistance, 0) + COALESCE(finger1.sleep_resistance, 0) +
+        COALESCE(finger2.sleep_resistance, 0) + COALESCE(weapon_hand1.sleep_resistance, 0) +
+        COALESCE(weapon_hand2.sleep_resistance, 0) + COALESCE(r.sleep_resistance, 0)) AS total_sleep_resistance
+		
+FROM
+    player_data pd
+LEFT JOIN items head ON pd.head = head.itemid
+LEFT JOIN items chest ON pd.chest = chest.itemid
+LEFT JOIN items hands ON pd.hands = hands.itemid
+LEFT JOIN items legs ON pd.legs = legs.itemid
+LEFT JOIN items feet ON pd.feet = feet.itemid
+LEFT JOIN items back ON pd.back = back.itemid
+LEFT JOIN items neck ON pd.neck = neck.itemid
+LEFT JOIN items finger1 ON pd.finger1 = finger1.itemid
+LEFT JOIN items finger2 ON pd.finger2 = finger2.itemid
+LEFT JOIN items weapon_hand1 ON pd.weapon_hand1 = weapon_hand1.itemid
+LEFT JOIN items weapon_hand2 ON pd.weapon_hand2 = weapon_hand2.itemid
+LEFT JOIN races r ON pd.raceid = r.raceid
+GROUP BY pd.playerid, r.raceid;
