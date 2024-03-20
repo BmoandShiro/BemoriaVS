@@ -118,7 +118,23 @@ class Database:
                 WHERE pd.playerid = $1;
             """, player_id)
             return dict(row) if row else None
-
+        
+    async def fetch_accessible_locations(self, current_location_id):
+        async with self.pool.acquire() as conn:
+            # Retrieve locations that are directly accessible from the current location
+            rows = await conn.fetch("""
+                SELECT 
+                    loc.name, 
+                    loc.description, 
+                    loc.locationid
+                FROM 
+                    paths 
+                JOIN 
+                    locations loc ON loc.locationid = paths.to_location_id
+                WHERE 
+                    paths.from_location_id = $1;
+            """, current_location_id)
+            return rows
         
     # ... additional methods for other database interactions
 async def main():

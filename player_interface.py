@@ -50,8 +50,12 @@ class playerinterface:
         else:
                     # If there's no data, inform the user
                     await ctx.send("Your player data could not be found.", ephemeral=True)
+                    
+    
 
     # Setup function to load this as an extension
 def setup(bot):
     player_interface_extension = playerinterface(bot)
-   
+
+
+       
