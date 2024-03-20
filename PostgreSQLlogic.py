@@ -65,7 +65,7 @@ class Database:
     
 
             
-        async def get_or_create_player(self, discord_id):
+    async def get_or_create_player(self, discord_id):
             async with self.pool.acquire() as conn:
                 # Try to get the player by Discord ID
                 player = await conn.fetchrow(
@@ -98,6 +98,28 @@ class Database:
                 SET is_active = EXCLUDED.is_active;
             """, player_id, titleid)
 
+    # Part of the Database class
+    async def set_initial_location(self, player_id, location_id=2):  # Default location_id for Tradewind City
+        async with self.pool.acquire() as conn:
+            # Update the player_data table instead of players
+            await conn.execute("""
+                UPDATE player_data
+                SET current_location = $2
+                WHERE playerid = $1;
+            """, player_id, location_id)
+
+
+    async def fetch_player_details(self, player_id):
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT pd.health, pd.mana, pd.stamina, l.name
+                FROM player_data pd
+                JOIN locations l ON l.locationid = pd.current_location
+                WHERE pd.playerid = $1;
+            """, player_id)
+            return dict(row) if row else None
+
+        
     # ... additional methods for other database interactions
 async def main():
     # Replace with your actual DSN

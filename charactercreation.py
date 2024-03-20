@@ -6,6 +6,7 @@ from interactions.api.events import Component
 from psycopg2 import OperationalError
 from PostgreSQLlogic import Database
 import logging
+from player_interface import playerinterface
 
 logging.basicConfig(level=logging.INFO)
 
@@ -63,23 +64,38 @@ class CharacterCreation(Extension):
         titleid = int(ctx.custom_id.split('_')[-1])
         # Extract the player's Discord ID from the context
         discord_id = ctx.author.id
-        
+    
         # Save the player's title choice in the database
         await self.db.save_player_title_choice(discord_id, titleid)
         await ctx.send(f"You have chosen the title ID: {titleid}", ephemeral=True)
     
-    # Part of the Database class
-    async def set_initial_location(self, player_id, location_id=2):  # Default location_id for Tradewind City
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-                UPDATE players
-                SET current_location = $2
-                WHERE playerid = $1;
-            """, player_id, location_id)
-
         # Use this method after the player has finished character creation
-        await db.set_initial_location(player_id)
+        await self.db.set_initial_location(discord_id)
+
+        # Now fetch player details to get location_name, health, mana, and stamina
+        # This assumes you have a method to get player_id from discord_id
+        player_id = await self.db.get_or_create_player(discord_id)
+        player_data = await self.db.fetch_player_details(player_id)
+
+        if player_data:
+            # Extract the details from player_data
+            location_name = player_data['name']
+            health = player_data['health']
+            mana = player_data['mana']
+            stamina = player_data['stamina']
+
+            # Instantiate player_interface with bot and send the UI
+            player_interface = playerinterface(self.bot)
+            await player_interface.send_player_ui(ctx, location_name, health, mana, stamina)
+        else:
+            await ctx.send("Could not load your player details.", ephemeral=True)
+    
+
         
+        
+        
+
+    
 # Don't forget to add the setup function
 # charactercreation.py
 def setup(bot):

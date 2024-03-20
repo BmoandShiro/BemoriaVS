@@ -5,7 +5,7 @@ from functools import partial
 class playerinterface:
     def __init__(self, bot):
         self.bot = bot
-        self.db = db
+        
         
     async def send_player_ui(self, ctx, location_name, health, mana, stamina):
         embed = Embed(
@@ -33,26 +33,25 @@ class playerinterface:
 
     # ... other handlers for skills, stats, inventory, quests ...
     '''
-    @slash_command(name="ui", description="Show the main UI", guild_ids=[your_guild_id_here])  # Add your guild ID here for testing
-        async def ui_command(self, ctx):
-            # Match discord_id with playerid in the database
-            player_id = await self.db.get_or_create_player(ctx.author.id)
+    @slash_command(name="ui", description="Show the main UI")  # Add guild_ids for testing
+    async def ui_command(self, ctx):
+        # Access the database from the bot object
+        db = self.bot.db
+        player_id = await db.get_or_create_player(ctx.author.id)
+        player_data = await db.fetch_player_details(player_id)
 
-            # Fetch the player_data using the matched playerid
-            player_data = await self.db.fetch_player_details(player_id)
-
-            if player_data:
-                # Send the UI with the fetched data
-                await self.send_player_ui(ctx, 
-                                          player_data['location_name'], 
-                                          player_data['health'], 
-                                          player_data['mana'], 
-                                          player_data['stamina'])
-            else:
-                # If there's no data, inform the user
-                await ctx.send("Your player data could not be found.", ephemeral=True)
+        if player_data:
+                    # Send the UI with the fetched data
+                    await self.send_player_ui(ctx, 
+                                              player_data['location_name'], 
+                                              player_data['health'], 
+                                              player_data['mana'], 
+                                              player_data['stamina'])
+        else:
+                    # If there's no data, inform the user
+                    await ctx.send("Your player data could not be found.", ephemeral=True)
 
     # Setup function to load this as an extension
-    def setup(bot):
-    playerinterface.bot = bot
-    bot.add_extension(playerinterface)
+def setup(bot):
+    player_interface_extension = playerinterface(bot)
+   
