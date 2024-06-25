@@ -1,4 +1,3 @@
-
 from interactions import SlashCommand, Client, Extension 
 from charactercreation import setup as cc_setup
 from charactercreation import CharacterCreation
@@ -34,4 +33,3 @@ bot.load_extension("player_interface")  # Assuming player_interface.py is in the
 
 # Start the bot with the specified token
 bot.start()  # Note: Use start() instead of run()
-
