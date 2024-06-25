@@ -12,7 +12,7 @@ TOKEN = 'MTE3Nzc3MjcyNDE1MjY5Njg1Mg.GmEncj.q1k72hSszveLmlOLde-I1XVvVPAFLBlQAJdKX
 
 bot = Client(token=TOKEN)
 
-DATABASE_DSN = "dbname='BMOSRPG' user='postgres' host='localhost' password='your_password' port='5432'"
+DATABASE_DSN = "dbname='BMOSRPG' user='postgres' host='localhost' password='Oshirothegreat9!' port='5432'"
 
 db = Database(dsn=DATABASE_DSN)
 bot.db = db  # Attach the database instance to the bot object

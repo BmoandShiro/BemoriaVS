@@ -17,7 +17,7 @@ class CharacterCreation(Extension):
     def __init__(self, bot):
         self.bot = bot
         # Assume db is an instance of your Database class that's already connected
-        self.db = Database(dsn="postgresql://postgres:Oshirothegreat9@localhost:5432/BMOSRPG")
+        self.db = Database(dsn="postgresql://postgres:Oshirothegreat9!@localhost:5432/BMOSRPG")
 
     @slash_command(name="create_character", description="Start creating a new character.")
     async def create_character(self, ctx):
