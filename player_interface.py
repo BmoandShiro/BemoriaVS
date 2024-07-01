@@ -1,10 +1,14 @@
 import interactions
 from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command
 from functools import partial
+from config import GUILD_IDS
+import logging
+from PostgreSQLlogic import Database
 
-class playerinterface:
+class playerinterface(Extension):  # Inherit from Extension
     def __init__(self, bot):
         self.bot = bot
+        self.db = Database(dsn="postgresql://postgres:Oshirothegreat9!@localhost:5432/BMOSRPG")
         
         
     async def send_player_ui(self, ctx, location_name, health, mana, stamina):
@@ -25,37 +29,29 @@ class playerinterface:
 
         await ctx.send(embeds=[embed], components=[travel_button, skills_button, stats_button, inventory_button, quests_button])
 
-    '''# Example of handling a button press
-    @interactions.extension_component(custom_id="travel")
-    async def travel_button_handler(self, ctx: interactions.CommandContext):
-        # Handle travel logic here
-        pass
-
-    # ... other handlers for skills, stats, inventory, quests ...
-    '''
-    @slash_command(name="ui", description="Show the main UI")  # Add guild_ids for testing
+    @slash_command(name="ui", description="Show the main UI", scopes=GUILD_IDS)  # Use scopes to limit to specific guilds
     async def ui_command(self, ctx):
-        # Access the database from the bot object
+        logging.info("ui_command called")
         db = self.bot.db
-        player_id = await db.get_or_create_player(ctx.author.id)
-        player_data = await db.fetch_player_details(player_id)
+        if db.pool is None:
+            logging.error("Database pool is not initialized")
+            await ctx.send("Database connection issue. Please try again later.", ephemeral=True)
+            return
 
-        if player_data:
-                    # Send the UI with the fetched data
-                    await self.send_player_ui(ctx, 
-                                              player_data['location_name'], 
-                                              player_data['health'], 
-                                              player_data['mana'], 
-                                              player_data['stamina'])
-        else:
-                    # If there's no data, inform the user
-                    await ctx.send("Your player data could not be found.", ephemeral=True)
+        try:
+            logging.info(f"Fetching player data for user {ctx.author.id}")
+            player_id = await db.get_or_create_player(ctx.author.id)
+            logging.info(f"Player ID: {player_id}")
+            player_data = await db.fetch_player_details(player_id)
+            logging.info(f"Player Data: {player_data}")
+
+            if player_data:
+                await self.send_player_ui(ctx, player_data['location_name'], player_data['health'], player_data['mana'], player_data['stamina'])
+            else:
+                await ctx.send("Your player data could not be found.", ephemeral=True)
+        except Exception as e:
+            logging.error(f"An error occurred while fetching player data: {e}")
+            await ctx.send("An error occurred while fetching your player data. Please try again later.", ephemeral=True)
                     
-    
-
-    # Setup function to load this as an extension
 def setup(bot):
-    player_interface_extension = playerinterface(bot)
-
-
-       
+    playerinterface(bot)  # Register the extension properly

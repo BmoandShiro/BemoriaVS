@@ -1,5 +1,6 @@
 import asyncpg
 import asyncio
+import logging
 
 
 class Database:
@@ -10,7 +11,11 @@ class Database:
     
 
     async def connect(self):
-        self.pool = await asyncpg.create_pool(dsn=self.dsn)
+        try:
+            self.pool = await asyncpg.create_pool(dsn=self.dsn)
+            logging.info("Database connection pool created successfully")
+        except (Exception, asyncpg.PostgresError) as error:
+            logging.error(f"Error while connecting to PostgreSQL: {error}")
 
     async def close(self):
         await self.pool.close()
@@ -18,6 +23,7 @@ class Database:
     async def create_pool(self):
         print("DSN being used:", self.dsn)
         self.pool = await asyncpg.create_pool(self.dsn)
+        
     async def fetch_races(self):
         if self.pool is None:
             await self.create_pool()  # Make sure the pool is created before using it
@@ -136,19 +142,17 @@ class Database:
             """, current_location_id)
             return rows
         
-    # ... additional methods for other database interactions
-async def main():
-    # Replace with your actual DSN
-    db = Database(dsn="postgresql://postgres:Oshirothegreat9@localhost:5432/BMOSRPG")
-    await db.connect()
-    # Example usage
-    races = await db.fetch_races()
-    print(races)
-    await db.save_player_choice(discord_id, raceid)
-    await db.close()
+    async def fetch_player_stats(self, player_id):
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT *
+                FROM player_stats_view
+                WHERE playerid = $1;
+            """, player_id)
+            return rows
 
-if __name__ == "__main__":
-    asyncio.run(main())
+    # ... additional methods for other database interactions
+
     
     
 
