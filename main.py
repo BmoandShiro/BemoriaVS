@@ -11,7 +11,11 @@ logging.basicConfig(level=logging.INFO)
 
 TOKEN = 'MTE3Nzc3MjcyNDE1MjY5Njg1Mg.GmEncj.q1k72hSszveLmlOLde-I1XVvVPAFLBlQAJdKXY'
 
-bot = Client(token=TOKEN)
+# Since GUILD_IDS is now a list with one element, we extract the single ID for debug_scope
+debug_scope = GUILD_IDS[0]
+
+bot = Client(token=TOKEN, debug_scope=debug_scope)
+
 
 DATABASE_DSN = "dbname='BMOSRPG' user='postgres' host='localhost' password='Oshirothegreat9!' port='5432'"
 

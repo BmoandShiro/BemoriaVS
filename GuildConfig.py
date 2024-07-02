@@ -1,3 +1,3 @@
 # GuildConfig.py
-GUILD_IDS = [845519088356818964, 1177772579814113403]  # Add your guild IDs here
+GUILD_IDS = [1177772579814113403]  # Add your guild IDs here
 
