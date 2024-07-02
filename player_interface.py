@@ -55,7 +55,7 @@ class playerinterface:
 
     # Setup function to load this as an extension
 def setup(bot):
-    player_interface_extension = playerinterface(bot)
+    playerinterface(bot)
 
 
        
