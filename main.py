@@ -5,6 +5,7 @@ from PostgreSQLlogic import Database  # Import the Database class
 from player_interface import setup as player_interface_setup
 from functools import partial
 import logging
+from GuildConfig import GUILD_IDS
 
 logging.basicConfig(level=logging.INFO)
 
