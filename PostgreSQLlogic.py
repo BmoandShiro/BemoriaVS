@@ -140,6 +140,14 @@ class Database:
             """, current_location_id)
             return rows
         
+
+    async def fetch_view_stats(self, player_id):
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT * FROM player_stats_view WHERE playerid = $1;
+            """, player_id)
+            return dict(row) if row else None
+        
     # ... additional methods for other database interactions
 async def main():
     # Replace with your actual DSN

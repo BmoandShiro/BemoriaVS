@@ -1,5 +1,5 @@
 import interactions
-from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command, SlashContext
+from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command, SlashContext, component_callback, ComponentContext
 from functools import partial
 
 class playerinterface(Extension):
@@ -23,6 +23,31 @@ class playerinterface(Extension):
         quests_button = Button(style=ButtonStyle.PRIMARY, label="Quests", custom_id="quests")
 
         await ctx.send(embeds=[embed], components=[travel_button, skills_button, stats_button, inventory_button, quests_button])
+        
+    async def send_player_stats(self, ctx, player_id):
+        db = self.bot.db
+        player_stats = await db.fetch_view_stats(player_id)
+        
+        if player_stats:
+            embeds = []
+            embed = Embed(
+                title="Player Stats",
+                description=f"Stats for Player ID: {player_id}",
+                color=0x00FF00
+            )
+
+            for i, (stat, value) in enumerate(player_stats.items()):
+                if stat != "playerid" and value is not None:
+                    color = 0xFF0000 if value < 0 else 0x00FF00
+                    embed.add_field(name=stat.replace("_", " ").title(), value=f"{value}", inline=True)
+                    if (i + 1) % 25 == 0:  # Add a new embed if there are 25 fields
+                        embeds.append(embed)
+                        embed = Embed(color=0x00FF00)
+            
+            embeds.append(embed)
+            await ctx.send(embeds=embeds)
+        else:
+            await ctx.send("Your player stats could not be found.", ephemeral=True)
 
     @slash_command(name="playerui", description="Reload the player UI menu")
     async def reload_ui_command(self, ctx):
@@ -38,6 +63,12 @@ class playerinterface(Extension):
                                       player_data['stamina'])
         else:
             await ctx.send("Your player data could not be found.", ephemeral=True)
+            
+    @component_callback("view_stats")
+    async def view_stats_button_handler(self, ctx: ComponentContext):
+        db = self.bot.db
+        player_id = await db.get_or_create_player(ctx.author.id)
+        await self.send_player_stats(ctx, player_id)
 
     # Setup function to load this as an extension
 def setup(bot):
