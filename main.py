@@ -24,6 +24,8 @@ bot.db = db  # Attach the database instance to the bot object
 
 logging.info("Loading extensions...")
 # When setting up the bot, make sure the CharacterCreation class is defined to accept a bot and a db instance
+# Load your extensions here
+player_interface_setup(bot)  # Pass the database instance to the setup function of the player_interface 
 cc_setup(bot)  # Pass both the bot and db instances to the setup function
 
 # Event listener for when the bot has switched from offline to online.
@@ -32,9 +34,6 @@ async def on_ready():
     print(f"Logged in as {bot.me.name}")
     await bot.db.connect()
     
-# Load your extensions here
-player_interface_setup(bot)  # Pass the database instance to the setup function of the player_interface    
-bot.load_extension("player_interface")  # Assuming player_interface.py is in the same directory
 
 # Start the bot with the specified token
 bot.start()  # Note: Use start() instead of run()

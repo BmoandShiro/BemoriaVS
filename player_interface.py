@@ -1,5 +1,5 @@
 import interactions
-from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command
+from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command, SlashContext
 from functools import partial
 
 class playerinterface:
