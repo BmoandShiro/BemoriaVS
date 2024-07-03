@@ -17,7 +17,7 @@ debug_scope = GUILD_IDS[0]
 bot = Client(token=TOKEN, debug_scope=debug_scope)
 
 
-DATABASE_DSN = "dbname='BMOSRPG' user='postgres' host='localhost' password='Oshirothegreat9!' port='5432'"
+DATABASE_DSN = "postgresql://postgres:Oshirothegreat9!@localhost:5432/BMOSRPG"
 
 db = Database(dsn=DATABASE_DSN)
 bot.db = db  # Attach the database instance to the bot object
@@ -33,7 +33,7 @@ cc_setup(bot)  # Pass both the bot and db instances to the setup function
 async def on_ready():
     print(f"Logged in as {bot.me.name}")
     await bot.db.connect()
-    
+    await bot.sync_interactions()
 
 # Start the bot with the specified token
 bot.start()  # Note: Use start() instead of run()

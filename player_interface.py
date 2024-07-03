@@ -2,11 +2,10 @@ import interactions
 from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command, SlashContext
 from functools import partial
 
-class playerinterface:
+class playerinterface(Extension):
     def __init__(self, bot):
         self.bot = bot
-        
-        
+
     async def send_player_ui(self, ctx, location_name, health, mana, stamina):
         embed = Embed(
             title="Player Information",
@@ -25,33 +24,20 @@ class playerinterface:
 
         await ctx.send(embeds=[embed], components=[travel_button, skills_button, stats_button, inventory_button, quests_button])
 
-    '''# Example of handling a button press
-    @interactions.extension_component(custom_id="travel")
-    async def travel_button_handler(self, ctx: interactions.CommandContext):
-        # Handle travel logic here
-        pass
-
-    # ... other handlers for skills, stats, inventory, quests ...
-    '''
-    @slash_command(name="ui", description="Show the main UI")  # Add guild_ids for testing
-    async def ui_command(self, ctx):
-        # Access the database from the bot object
+    @slash_command(name="playerui", description="Reload the player UI menu")
+    async def reload_ui_command(self, ctx):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
         player_data = await db.fetch_player_details(player_id)
 
         if player_data:
-                    # Send the UI with the fetched data
-                    await self.send_player_ui(ctx, 
-                                              player_data['location_name'], 
-                                              player_data['health'], 
-                                              player_data['mana'], 
-                                              player_data['stamina'])
+            await self.send_player_ui(ctx, 
+                                      player_data['name'], 
+                                      player_data['health'], 
+                                      player_data['mana'], 
+                                      player_data['stamina'])
         else:
-                    # If there's no data, inform the user
-                    await ctx.send("Your player data could not be found.", ephemeral=True)
-                    
-    
+            await ctx.send("Your player data could not be found.", ephemeral=True)
 
     # Setup function to load this as an extension
 def setup(bot):

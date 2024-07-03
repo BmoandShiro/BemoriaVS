@@ -1,6 +1,6 @@
 import asyncpg
 import asyncio
-
+import logging
 
 class Database:
     def __init__(self, dsn):
@@ -11,7 +11,8 @@ class Database:
 
     async def connect(self):
         self.pool = await asyncpg.create_pool(dsn=self.dsn)
-
+        logging.info("Database connection pool created successfully")
+        
     async def close(self):
         await self.pool.close()
 
@@ -66,6 +67,9 @@ class Database:
 
             
     async def get_or_create_player(self, discord_id):
+            if self.pool is None:
+                await self.create_pool()  # Make sure the pool is created before using it
+                
             async with self.pool.acquire() as conn:
                 # Try to get the player by Discord ID
                 player = await conn.fetchrow(
