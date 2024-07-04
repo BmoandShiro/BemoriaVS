@@ -147,11 +147,37 @@ class Database:
                 SELECT * FROM player_stats_view WHERE playerid = $1;
             """, player_id)
             return dict(row) if row else None
-        
+    
+        #this one below can be simplified since i changed default values in the database table but its not broke so not fixing it yet
+    async def add_player_skills_xp(self, player_id):
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO player_skills_xp (
+                    playerid, illusion_magic_xp, dark_magic_xp, light_magic_xp, 
+                    fire_magic_defense_xp, water_magic_defense_xp, earth_magic_defense_xp, 
+                    air_magic_defense_xp, light_magic_defense_xp, dark_magic_defense_xp, 
+                    illusion_magic_defense_xp, woodcutting_xp, mining_xp, harvesting_xp, 
+                    cooking_xp, enchanting_xp, smithing_xp, jewelcrafting_xp, skinning_xp, 
+                    fishing_xp, alchemy_xp, leatherworking_xp, tanning_xp, sewing_xp, 
+                    weaving_xp, lockpicking_xp
+                ) VALUES (
+                    $1, 0, 0, 0, 
+                    0, 0, 0, 
+                    0, 0, 0, 
+                    0, 0, 0, 0, 
+                    0, 0, 0, 0, 0, 
+                    0, 0, 0, 0, 0, 
+                    0, 0
+                )
+                ON CONFLICT (playerid) DO NOTHING;
+            """, player_id)
+
+            
+
     # ... additional methods for other database interactions
 async def main():
     # Replace with your actual DSN
-    db = Database(dsn="postgresql://postgres:Oshirothegreat9@localhost:5432/BMOSRPG")
+    db = Database(dsn="postgresql://postgres:Oshirothegreat9!@localhost:5432/BMOSRPG")
     await db.connect()
     # Example usage
     races = await db.fetch_races()

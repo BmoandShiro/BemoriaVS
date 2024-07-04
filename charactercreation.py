@@ -84,6 +84,13 @@ class CharacterCreation(Extension):
             mana = player_data['mana']
             stamina = player_data['stamina']
 
+            await self.db.add_player_skills_xp(player_id)
+
+            await ctx.send(f"Character creation complete! Welcome to {location_name}. Health: {health}, Mana: {mana}, Stamina: {stamina}  /playerui for overview")
+        else:
+            await ctx.send("Could not load your player details.", ephemeral=True)
+            
+
             '''# Instantiate player_interface with bot and send the UI
             player_interface = playerinterface(self.bot)
             await player_interface.send_player_ui(ctx, location_name, health, mana, stamina)
