@@ -147,6 +147,13 @@ class Database:
                 SELECT * FROM player_stats_view WHERE playerid = $1;
             """, player_id)
             return dict(row) if row else None
+        
+    async def fetch_view_skills(self, player_id):
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT * FROM player_skill_levels WHERE playerid = $1;
+            """, player_id)
+            return dict(row) if row else None
     
         #this one below can be simplified since i changed default values in the database table but its not broke so not fixing it yet
     async def add_player_skills_xp(self, player_id):

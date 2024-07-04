@@ -49,6 +49,33 @@ class playerinterface(Extension):
         else:
             await ctx.send("Your player stats could not be found.", ephemeral=True)
 
+
+    async def send_player_skills(self, ctx, player_id):
+        db = self.bot.db
+        player_skills = await db.fetch_view_skills(player_id)
+        
+        if player_skills:
+            embeds = []
+            embed = Embed(
+                title="Player Skills",
+                description=f"Skills for Player ID: {player_id}",
+                color=0x00FF00
+            )
+
+            for i, (skill, value) in enumerate(player_skills.items()):
+                if skill != "playerid" and value is not None:
+                    color = 0xFF0000 if value < 0 else 0x00FF00
+                    embed.add_field(name=skill.replace("_", " ").title(), value=f"{value}", inline=True)
+                    if (i + 1) % 25 == 0:  # Add a new embed if there are 25 fields
+                        embeds.append(embed)
+                        embed = Embed(color=0x00FF00)
+            
+            embeds.append(embed)
+            await ctx.send(embeds=embeds)
+        else:
+            await ctx.send("Your player skills could not be found.", ephemeral=True)
+            
+
     @slash_command(name="playerui", description="Reload the player UI menu")
     async def reload_ui_command(self, ctx):
         db = self.bot.db
@@ -69,6 +96,12 @@ class playerinterface(Extension):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
         await self.send_player_stats(ctx, player_id)
+        
+    @component_callback("skills")
+    async def skills_button_handler(self, ctx: ComponentContext):
+        db = self.bot.db
+        player_id = await db.get_or_create_player(ctx.author.id)
+        await self.send_player_skills(ctx, player_id)
 
     # Setup function to load this as an extension
 def setup(bot):
