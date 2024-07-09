@@ -14,7 +14,7 @@ class TravelSystem(Extension):
             description += f"Path to: {path['to_location_name']} - Condition: {path['condition_description']}\n"
 
         for loc in connected_locations:
-            description += f"Connected Location: {loc['name']}\n"
+            description += f"{loc['name']}\n"
 
         embed = Embed(
             title="Available Travel Paths",
