@@ -102,6 +102,15 @@ class playerinterface(Extension):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
         await self.send_player_skills(ctx, player_id)
+        
+    @component_callback("travel")
+    async def travel_button_handler(self, ctx: ComponentContext):
+        db = self.bot.db
+        player_id = await db.get_or_create_player(ctx.author.id)
+        player_data = await db.fetch_player_details(player_id)
+        if player_data:
+            current_location_id = player_data['current_location']
+            self.bot.dispatch(Event("display_locations", ctx, current_location_id))
 
     # Setup function to load this as an extension
 def setup(bot):

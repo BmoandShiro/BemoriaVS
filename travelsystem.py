@@ -1,26 +1,33 @@
-class TravelSystem:
-    def __init__(self, db):
-        self.db = db
+import interactions
+from interactions import Extension, Embed, listen, Event
 
-    async def display_locations(self, current_location_id):
-        # Fetch and display available locations to the player
+class TravelSystem(Extension):
+    def __init__(self, bot):
+        self.bot = bot
+
+    @listen()
+    async def on_display_locations(self, event: Event):
+        ctx, current_location_id = event.args
         available_paths = await self.get_available_paths(current_location_id)
-        for path in available_paths:
-            print(f"Path ID: {path['path_id']}, To Location: {path['to_location_name']}, Condition: {path['condition_description']}")
-
-        # Fetch and display connected parent and child locations
         connected_locations = await self.get_connected_locations(current_location_id)
-        for loc in connected_locations:
-            print(f"Connected Location: {loc['name']}")
 
-    async def travel_to_location(self, player_id, location_id):
-        # Update the player's current location in the database
-        await self.db.update_player_location(player_id, location_id)
-        # Handle any other logic necessary for changing locations
-        pass
+        description = ""
+        for path in available_paths:
+            description += f"Path to: {path['to_location_name']} - Condition: {path['condition_description']}\n"
+
+        for loc in connected_locations:
+            description += f"Connected Location: {loc['name']}\n"
+
+        embed = Embed(
+            title="Available Travel Paths",
+            description=description,
+            color=0x00FF00
+        )
+
+        await ctx.send(embed=embed)
 
     async def get_available_paths(self, current_location_id):
-        async with self.db.pool.acquire() as conn:
+        async with self.bot.db.pool.acquire() as conn:
             query = """
             SELECT p.path_id, 
                    CASE 
@@ -38,7 +45,7 @@ class TravelSystem:
             return results
 
     async def get_connected_locations(self, current_location_id):
-        async with self.db.pool.acquire() as conn:
+        async with self.bot.db.pool.acquire() as conn:
             query = """
             SELECT l2.locationid, l2.name
             FROM public.locations l1
@@ -48,15 +55,5 @@ class TravelSystem:
             results = await conn.fetch(query, current_location_id)
             return results
 
-# Part of the Database class
-class Database:
-    def __init__(self, pool):
-        self.pool = pool
-
-    async def update_player_location(self, player_id, new_location_id):
-        async with self.pool.acquire() as conn:
-            await conn.execute("""
-            UPDATE players
-            SET current_location = $2
-            WHERE playerid = $1
-            """, player_id, new_location_id)
+def setup(bot):
+    TravelSystem(bot)
