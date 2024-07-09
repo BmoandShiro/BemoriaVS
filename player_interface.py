@@ -64,18 +64,30 @@ class playerinterface(Extension):
                 color=0x00FF00
             )
 
-            for i, (skill, value) in enumerate(player_skills.items()):
-                if skill != "playerid" and value is not None:
-                    color = 0xFF0000 if value < 0 else 0x00FF00
-                    embed.add_field(name=skill.replace("_", " ").title(), value=f"{value}", inline=True)
-                    if (i + 1) % 25 == 0:  # Add a new embed if there are 25 fields
-                        embeds.append(embed)
-                        embed = Embed(color=0x00FF00)
+            skill_pairs = list(player_skills.items())[1:]  # Skip the playerid
+
+            for i in range(0, len(skill_pairs), 2):
+                if i < len(skill_pairs):
+                    skill1, value1 = skill_pairs[i]
+                    embed.add_field(name=skill1.replace("_", " ").title(), value=f"{value1}", inline=True)
+                if i + 1 < len(skill_pairs):
+                    skill2, value2 = skill_pairs[i + 1]
+                    embed.add_field(name=skill2.replace("_", " ").title(), value=f"{value2}", inline=True)
+                
+                if (i + 2) % 2 == 0:  # Add a new embed after every 2 fields
+                    embeds.append(embed)
+                    embed = Embed(color=0x00FF00)
             
-            embeds.append(embed)
-            await ctx.send(embeds=embeds)
+            if len(embed.fields) > 0:
+                embeds.append(embed)
+
+            # Send embeds in batches of 10
+            for i in range(0, len(embeds), 10):
+                await ctx.send(embeds=embeds[i:i+10])
         else:
             await ctx.send("Your player skills could not be found.", ephemeral=True)
+            
+
             
 
     @slash_command(name="playerui", description="Reload the player UI menu")
