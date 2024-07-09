@@ -113,8 +113,14 @@ class playerinterface(Extension):
         logging.info(f"Player Data: {player_data}")
         if player_data:
             current_location_id = player_data['current_location']
-            await self.bot.extensions['TravelSystem'].display_locations(ctx, current_location_id)
-            
+            travel_system = self.bot.travel_system  # Access the TravelSystem instance directly
+            if travel_system:
+                await travel_system.display_locations(ctx, current_location_id)
+            else:
+                await ctx.send("Travel system is not available.", ephemeral=True)
+        else:
+            await ctx.send("Your player data could not be found.", ephemeral=True)
+
     # Setup function to load this as an extension
 def setup(bot):
     playerinterface(bot)
