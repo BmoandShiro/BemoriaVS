@@ -5,6 +5,7 @@ from PostgreSQLlogic import Database  # Import the Database class
 from player_interface import setup as player_interface_setup
 from functools import partial
 import logging
+from travelsystem import setup as ts_setup 
 from GuildConfig import GUILD_IDS
 
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +28,8 @@ logging.info("Loading extensions...")
 # Load your extensions here
 player_interface_setup(bot)  # Pass the database instance to the setup function of the player_interface 
 cc_setup(bot)  # Pass both the bot and db instances to the setup function
+ts_setup(bot)
+
 
 # Event listener for when the bot has switched from offline to online.
 @bot.event

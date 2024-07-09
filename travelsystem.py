@@ -1,13 +1,11 @@
 import interactions
-from interactions import Extension, Embed, listen, Event
+from interactions import Extension, Embed, listen
 
 class TravelSystem(Extension):
     def __init__(self, bot):
         self.bot = bot
 
-    @listen()
-    async def on_display_locations(self, event: Event):
-        ctx, current_location_id = event.args
+    async def display_locations(self, ctx, current_location_id):
         available_paths = await self.get_available_paths(current_location_id)
         connected_locations = await self.get_connected_locations(current_location_id)
 

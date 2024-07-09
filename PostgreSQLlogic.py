@@ -124,12 +124,13 @@ class Database:
     async def fetch_player_details(self, player_id):
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("""
-                SELECT pd.health, pd.mana, pd.stamina, l.name
+                SELECT pd.health, pd.mana, pd.stamina, l.name, pd.current_location
                 FROM player_data pd
                 JOIN locations l ON l.locationid = pd.current_location
                 WHERE pd.playerid = $1;
             """, player_id)
             return dict(row) if row else None
+
         
     async def fetch_accessible_locations(self, current_location_id):
         async with self.pool.acquire() as conn:

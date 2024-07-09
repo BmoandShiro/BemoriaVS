@@ -1,6 +1,8 @@
 import interactions
 from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command, SlashContext, component_callback, ComponentContext
 from functools import partial
+import logging
+import math 
 
 class playerinterface(Extension):
     def __init__(self, bot):
@@ -108,10 +110,11 @@ class playerinterface(Extension):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
         player_data = await db.fetch_player_details(player_id)
+        logging.info(f"Player Data: {player_data}")
         if player_data:
             current_location_id = player_data['current_location']
-            self.bot.dispatch(Event("display_locations", ctx, current_location_id))
-
+            await self.bot.extensions['TravelSystem'].display_locations(ctx, current_location_id)
+            
     # Setup function to load this as an extension
 def setup(bot):
     playerinterface(bot)
