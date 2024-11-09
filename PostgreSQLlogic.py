@@ -189,6 +189,20 @@ class Database:
             """, player_id)
 
             
+    async def fetch(self, query, *args):
+        """Fetch multiple rows from the database."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(query, *args)
+
+    async def fetchrow(self, query, *args):
+        """Fetch a single row from the database."""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow(query, *args)
+
+    async def execute(self, query, *args):
+        """Execute a query (for inserts, updates, and deletes)."""
+        async with self.pool.acquire() as conn:
+            await conn.execute(query, *args)
 
     # ... additional methods for other database interactions
 async def main():
