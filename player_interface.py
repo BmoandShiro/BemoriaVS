@@ -132,6 +132,22 @@ class playerinterface(Extension):
                 await ctx.send("Travel system is not available.", ephemeral=True)
         else:
             await ctx.send("Your player data could not be found.", ephemeral=True)
+            
+    @component_callback("inventory")
+    async def inventory_button_handler(self, ctx: ComponentContext):
+        db = self.bot.db
+        player_id = await db.get_or_create_player(ctx.author.id)
+        inventory_system = self.bot.inventory_system  # Access the Inventory system instance
+        if inventory_system:
+            await inventory_system.display_inventory(ctx, player_id)
+        else:
+            await ctx.send("Inventory system is not available.", ephemeral=True)
+
+    @component_callback("quests")
+    async def quests_button_handler(self, ctx: ComponentContext):
+        # Add logic to handle the quests button, possibly calling a quest system
+        await ctx.send("Quest functionality coming soon!", ephemeral=True)
+
 
     # Setup function to load this as an extension
 def setup(bot):

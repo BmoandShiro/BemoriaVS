@@ -7,6 +7,9 @@ from functools import partial
 import logging
 from travelsystem import TravelSystem, setup as ts_setup 
 from GuildConfig import GUILD_IDS
+from Inventory import Inventory
+from inventory_systems import InventorySystem  # Import the InventorySystem wrapper
+from travelsystem import TravelSystem
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,6 +32,10 @@ logging.info("Loading extensions...")
 player_interface_setup(bot)  # Pass the database instance to the setup function of the player_interface 
 cc_setup(bot)  # Pass both the bot and db instances to the setup function
 #ts_setup(bot) #had to take this out for now to make it work idk why i need to learn this part better still
+
+# Create and attach InventorySystem to the bot
+inventory_system = InventorySystem(db)
+bot.inventory_system = inventory_system  # Attach InventorySystem to bot for easy access
 
 # Create and attach the TravelSystem instance to the bot idk why this worked but it did so read into this more
 travel_system = TravelSystem(bot)
