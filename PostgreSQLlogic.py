@@ -211,6 +211,15 @@ class Database:
             player_id
         )
         return row["inventory_slots"] if row else None
+    
+    async def increase_inventory_capacity(self, player_id, additional_slots=5):
+        """Increase the player's inventory slots by a specified number."""
+        await self.execute(
+            "UPDATE player_data SET inventory_slots = inventory_slots + $2 WHERE playerid = $1",
+            player_id, additional_slots
+        )
+        return f"Inventory capacity increased by {additional_slots} slots."
+
 
 
     # ... additional methods for other database interactions

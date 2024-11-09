@@ -4,23 +4,25 @@ class Inventory:
         self.player_id = player_id
 
     async def add_item(self, item_id, quantity=1):
-        # Check if the player has enough slots
+        # Fetch maximum slots and current item count
         max_slots = await self.db.get_inventory_capacity(self.player_id)
         current_item_count = await self.db.fetchval(
             "SELECT COUNT(*) FROM inventory WHERE playerid = $1",
             self.player_id
         )
 
+        # Check if the player has enough slots
         if current_item_count >= max_slots:
             return "Your inventory is full. You cannot add more items."
 
-        # Existing item logic
+        # Check if the item exists and if it's stackable
         item_info = await self.db.fetchrow("SELECT * FROM items WHERE itemid = $1", item_id)
         if not item_info:
             return "Invalid item."
 
         is_stackable = item_info["max_stack"] > 1
 
+        # Add or update item in inventory
         existing_item = await self.db.fetchrow(
             "SELECT * FROM inventory WHERE playerid = $1 AND itemid = $2",
             self.player_id, item_id
@@ -38,34 +40,43 @@ class Inventory:
                 self.player_id, item_id, quantity
             )
 
-        return "Item added to inventory."
+        # Calculate remaining slots
+        remaining_slots = max_slots - (current_item_count + 1)
+        return f"Item added to inventory. Remaining slots: {remaining_slots}."
 
     async def remove_item(self, item_id, quantity=1):
-        """
-        Removes an item from the player's inventory. If stackable, decreases the quantity.
-        If quantity reaches zero, removes the item from the inventory.
-        """
-        existing_item = await self.db.fetchrow("""
-            SELECT * FROM inventory WHERE playerid = $1 AND itemid = $2
-        """, self.player_id, item_id)
+        # Check if item exists in inventory
+        existing_item = await self.db.fetchrow(
+            "SELECT * FROM inventory WHERE playerid = $1 AND itemid = $2",
+            self.player_id, item_id
+        )
 
         if not existing_item:
             return "Item not found in inventory."
 
+        # Update quantity or remove item if quantity is zero
         if existing_item["quantity"] > quantity:
-            # Decrease quantity if stackable and quantity is greater than 1
             new_quantity = existing_item["quantity"] - quantity
-            await self.db.execute("""
-                UPDATE inventory SET quantity = $1 WHERE inventoryid = $2
-            """, new_quantity, existing_item["inventoryid"])
+            await self.db.execute(
+                "UPDATE inventory SET quantity = $1 WHERE inventoryid = $2",
+                new_quantity, existing_item["inventoryid"]
+            )
         else:
-            # Remove the item if quantity is zero
-            await self.db.execute("""
-                DELETE FROM inventory WHERE inventoryid = $1
-            """, existing_item["inventoryid"])
+            await self.db.execute(
+                "DELETE FROM inventory WHERE inventoryid = $1",
+                existing_item["inventoryid"]
+            )
 
-        return "Item removed from inventory."
+        # Calculate remaining slots after removal
+        max_slots = await self.db.get_inventory_capacity(self.player_id)
+        current_item_count = await self.db.fetchval(
+            "SELECT COUNT(*) FROM inventory WHERE playerid = $1",
+            self.player_id
+        )
+        remaining_slots = max_slots - current_item_count
 
+        return f"Item removed from inventory. Remaining slots: {remaining_slots}."
+    
     async def equip_item(self, item_id, slot):
         """
         Equips an item by setting isequipped to True and assigning it to the specified slot.
