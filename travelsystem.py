@@ -66,10 +66,11 @@ class TravelSystem(Extension):
         query = """
         SELECT l.locationid, l.name, l.description
         FROM locations l
+        JOIN paths p ON p.from_location_id = $1 AND p.to_location_id = l.locationid
         JOIN player_data pd ON pd.playerid = $2
         LEFT JOIN inventory i ON i.playerid = pd.playerid AND i.itemid = l.required_item_id
-        WHERE (l.parentlocationid = $1 OR l.locationid = $1)
-        AND (l.xp_requirement IS NULL OR pd.xp >= l.xp_requirement)
+        WHERE 
+            (l.xp_requirement IS NULL OR pd.xp >= l.xp_requirement)
         AND (l.required_item_id IS NULL OR i.itemid IS NOT NULL)
         AND NOT EXISTS (
             SELECT 1
