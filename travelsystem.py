@@ -1,5 +1,6 @@
 import interactions
 from interactions import Extension, Embed, SlashContext, OptionType, slash_command
+import logging
 
 class TravelSystem(Extension):
     def __init__(self, bot):
@@ -19,117 +20,99 @@ class TravelSystem(Extension):
         ]
     )
     async def travel_to(self, ctx: SlashContext, destination: str):
-        current_location_id = await self.get_current_location_id(ctx.author.id)
+        player_id = await self.get_player_id(ctx.author.id)
+        if player_id is None:
+            await ctx.send("Could not find your player data. Please ensure your data is correct.", ephemeral=True)
+            return
+
+        current_location_id = await self.get_current_location_id(player_id)
         if current_location_id is None:
-            await ctx.send("Could not find your current location. Please ensure your data is correct.", ephemeral=True)
+            await ctx.send("Could not find your current location. Please try again later.", ephemeral=True)
             return
 
-        accessible_locations = await self.get_connected_locations(current_location_id)
-        if accessible_locations is None:
-            await ctx.send("Could not fetch accessible locations. Please try again later.", ephemeral=True)
-            return
-
+        accessible_locations = await self.get_connected_locations(current_location_id, player_id)
         destination_location = next((loc for loc in accessible_locations if loc['name'] == destination), None)
-        if destination_location and await self.check_conditions(ctx.author.id, destination):
-            await self.update_location(ctx.author.id, destination_location['locationid'])
+
+        if destination_location:
+            await self.update_location(player_id, destination_location['locationid'])
             await ctx.send(f"You have successfully traveled to {destination}.")
         else:
-            await ctx.send("The specified location is not accessible or you do not meet the conditions required to travel to this location.", ephemeral=True)
+            await ctx.send("The specified location is not accessible or you do not meet the conditions required to travel there.", ephemeral=True)
 
     @travel_to.autocomplete("destination")
     async def autocomplete(self, ctx: SlashContext, query: str):
-        current_location_id = await self.get_current_location_id(ctx.author.id)
-        if current_location_id is None:
+        player_id = await self.get_player_id(ctx.author.id)
+        if player_id is None:
             await ctx.send(choices=[])
             return
 
-        accessible_locations = await self.get_connected_locations(current_location_id)
-        if accessible_locations is None:
-            await ctx.send(choices=[])
-            return
-
+        current_location_id = await self.get_current_location_id(player_id)
+        accessible_locations = await self.get_connected_locations(current_location_id, player_id)
         matching_locations = [
             loc['name'] for loc in accessible_locations if query.lower() in loc['name'].lower()
         ]
         await ctx.send(choices=matching_locations)
 
-    async def get_current_location_id(self, user_id):
+    async def get_player_id(self, discord_id):
+        return await self.bot.db.get_or_create_player(discord_id)
+
+    async def get_current_location_id(self, player_id):
         async with self.bot.db.pool.acquire() as conn:
             query = "SELECT current_location FROM public.player_data WHERE playerid = $1"
-            result = await conn.fetchrow(query, user_id)
-            if result:
-                return result['current_location']
-            else:
-                return None
+            result = await conn.fetchrow(query, player_id)
+            return result['current_location'] if result else None
 
-    async def get_connected_locations(self, current_location_id):
+    async def get_connected_locations(self, current_location_id, player_id):
+        query = """
+        SELECT l.locationid, l.name, l.description
+        FROM locations l
+        JOIN player_data pd ON pd.playerid = $2
+        LEFT JOIN inventory i ON i.playerid = pd.playerid AND i.itemid = l.required_item_id
+        WHERE (l.parentlocationid = $1 OR l.locationid = $1)
+        AND (l.xp_requirement IS NULL OR pd.xp >= l.xp_requirement)  -- Check XP requirement
+        AND (l.required_item_id IS NULL OR i.itemid IS NOT NULL)
+        AND NOT EXISTS (
+            SELECT 1
+            FROM location_skill_requirements lsr
+            LEFT JOIN player_skills_xp ps ON ps.playerid = pd.playerid
+            WHERE lsr.locationid = l.locationid
+            AND CASE 
+                WHEN lsr.skill_id = 1 THEN ps.fire_magic_xp >= lsr.required_level
+                WHEN lsr.skill_id = 2 THEN ps.water_magic_xp >= lsr.required_level
+                WHEN lsr.skill_id = 3 THEN ps.earth_magic_xp >= lsr.required_level
+                WHEN lsr.skill_id = 4 THEN ps.air_magic_xp >= lsr.required_level
+                -- Add more conditions for other skill columns as needed
+                ELSE FALSE
+            END = FALSE
+        )
+        GROUP BY l.locationid, l.name, l.description;
+        """
         async with self.bot.db.pool.acquire() as conn:
-            query = """
-            SELECT l2.locationid, l2.name
-            FROM public.locations l1
-            JOIN public.locations l2 ON l1.parentlocationid = l2.locationid OR l2.parentlocationid = l1.locationid
-            WHERE l1.locationid = $1
-            """
-            results = await conn.fetch(query, current_location_id)
-            return results if results else None
+            results = await conn.fetch(query, current_location_id, player_id)
+            return [{'locationid': row['locationid'], 'name': row['name'], 'description': row['description']} for row in results] if results else []
 
-    async def check_conditions(self, user_id, destination):
-        # Implement the logic to check if the player meets the conditions for traveling to the destination
-        # For example, check if the player has the required item or stats
-        return True  # Placeholder, replace with actual condition checks
 
-    async def update_location(self, user_id, location_id):
+    async def update_location(self, player_id, location_id):
         async with self.bot.db.pool.acquire() as conn:
             query = "UPDATE public.player_data SET current_location = $1 WHERE playerid = $2"
-            await conn.execute(query, location_id, user_id)
+            await conn.execute(query, location_id, player_id)
 
     async def display_locations(self, ctx, current_location_id):
-        available_paths = await self.get_available_paths(current_location_id)
-        connected_locations = await self.get_connected_locations(current_location_id)
+        player_id = await self.get_player_id(ctx.author.id)
+        accessible_locations = await self.get_connected_locations(current_location_id, player_id)
+    
+        if not accessible_locations:
+            await ctx.send("No accessible locations found.", ephemeral=True)
+            return
 
-        description = ""
-        for path in available_paths:
-            description += f"Path to: {path['to_location_name']} - Condition: {path['condition_description']}\n"
-
-        for loc in connected_locations:
-            description += f"{loc['name']}\n"  # Only display location name
-
+        description = "\n".join([f"**{loc['name']}**: {loc['description']}" for loc in accessible_locations])
         embed = Embed(
-            title="Available Travel Paths",
+            title="Available Travel Destinations",
             description=description,
             color=0x00FF00
         )
-
         await ctx.send(embed=embed)
 
-    async def get_available_paths(self, current_location_id):
-        async with self.bot.db.pool.acquire() as conn:
-            query = """
-            SELECT p.path_id, 
-                   CASE 
-                     WHEN p.from_location_id = $1 THEN l_to.name 
-                     ELSE l_from.name 
-                   END AS to_location_name, 
-                   p.condition, 
-                   p.condition_description
-            FROM public.paths p
-            JOIN public.locations l_from ON p.from_location_id = l_from.locationid
-            JOIN public.locations l_to ON p.to_location_id = l_to.locationid
-            WHERE p.from_location_id = $1 OR p.to_location_id = $1
-            """
-            results = await conn.fetch(query, current_location_id)
-            return results
-
-    async def get_connected_locations(self, current_location_id):
-        async with self.bot.db.pool.acquire() as conn:
-            query = """
-            SELECT l2.locationid, l2.name
-            FROM public.locations l1
-            JOIN public.locations l2 ON l1.parentlocationid = l2.locationid OR l2.parentlocationid = l1.locationid
-            WHERE l1.locationid = $1
-            """
-            results = await conn.fetch(query, current_location_id)
-            return results
 
 def setup(bot):
     TravelSystem(bot)
