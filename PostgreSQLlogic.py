@@ -203,6 +203,15 @@ class Database:
         """Execute a query (for inserts, updates, and deletes)."""
         async with self.pool.acquire() as conn:
             await conn.execute(query, *args)
+            
+    async def get_inventory_capacity(self, player_id):
+        """Fetch the maximum inventory slots a player has."""
+        row = await self.fetchrow(
+            "SELECT inventory_slots FROM player_data WHERE playerid = $1;",
+            player_id
+        )
+        return row["inventory_slots"] if row else None
+
 
     # ... additional methods for other database interactions
 async def main():

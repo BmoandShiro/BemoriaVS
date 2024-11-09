@@ -4,34 +4,39 @@ class Inventory:
         self.player_id = player_id
 
     async def add_item(self, item_id, quantity=1):
-        """
-        Adds an item to the player's inventory. If the item is stackable, increases the quantity.
-        Otherwise, adds a new entry for each unit if the item is not stackable.
-        """
-        # Check if the item exists in items table and is stackable
+        # Check if the player has enough slots
+        max_slots = await self.db.get_inventory_capacity(self.player_id)
+        current_item_count = await self.db.fetchval(
+            "SELECT COUNT(*) FROM inventory WHERE playerid = $1",
+            self.player_id
+        )
+
+        if current_item_count >= max_slots:
+            return "Your inventory is full. You cannot add more items."
+
+        # Existing item logic
         item_info = await self.db.fetchrow("SELECT * FROM items WHERE itemid = $1", item_id)
         if not item_info:
             return "Invalid item."
 
         is_stackable = item_info["max_stack"] > 1
 
-        # Check if the item already exists in the player's inventory
-        existing_item = await self.db.fetchrow("""
-            SELECT * FROM inventory WHERE playerid = $1 AND itemid = $2
-        """, self.player_id, item_id)
+        existing_item = await self.db.fetchrow(
+            "SELECT * FROM inventory WHERE playerid = $1 AND itemid = $2",
+            self.player_id, item_id
+        )
 
         if existing_item and is_stackable:
-            # Increase quantity if stackable
             new_quantity = existing_item["quantity"] + quantity
-            await self.db.execute("""
-                UPDATE inventory SET quantity = $1 WHERE inventoryid = $2
-            """, new_quantity, existing_item["inventoryid"])
+            await self.db.execute(
+                "UPDATE inventory SET quantity = $1 WHERE inventoryid = $2",
+                new_quantity, existing_item["inventoryid"]
+            )
         else:
-            # Add new entry if not stackable or doesn't exist in inventory
-            await self.db.execute("""
-                INSERT INTO inventory (playerid, itemid, quantity, isequipped, slot)
-                VALUES ($1, $2, $3, false, NULL)
-            """, self.player_id, item_id, quantity)
+            await self.db.execute(
+                "INSERT INTO inventory (playerid, itemid, quantity, isequipped, slot) VALUES ($1, $2, $3, false, NULL)",
+                self.player_id, item_id, quantity
+            )
 
         return "Item added to inventory."
 
