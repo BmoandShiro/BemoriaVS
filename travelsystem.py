@@ -1,5 +1,5 @@
 import interactions
-from interactions import Extension, Embed, SlashContext, OptionType, slash_command
+from interactions import Extension, Embed, SlashContext, OptionType, slash_command, AutocompleteContext
 import logging
 
 class TravelSystem(Extension):
@@ -15,7 +15,7 @@ class TravelSystem(Extension):
                 "description": "The location you want to travel to",
                 "type": OptionType.STRING,
                 "required": True,
-                "autocomplete": True,
+                "autocomplete": True,  # Enable autocomplete
             }
         ]
     )
@@ -40,8 +40,8 @@ class TravelSystem(Extension):
             await ctx.send("The specified location is not accessible or you do not meet the conditions required to travel there.", ephemeral=True)
 
     @travel_to.autocomplete("destination")
-    async def autocomplete(self, ctx: SlashContext, query: str):
-        player_id = await self.get_player_id(ctx.author.id)
+    async def autocomplete(self, ctx: AutocompleteContext):
+        player_id = await self.get_player_id(ctx.user.id)
         if player_id is None:
             await ctx.send(choices=[])
             return
@@ -49,7 +49,7 @@ class TravelSystem(Extension):
         current_location_id = await self.get_current_location_id(player_id)
         accessible_locations = await self.get_connected_locations(current_location_id, player_id)
         matching_locations = [
-            loc['name'] for loc in accessible_locations if query.lower() in loc['name'].lower()
+            loc['name'] for loc in accessible_locations if ctx.input_text.lower() in loc['name'].lower()
         ]
         await ctx.send(choices=matching_locations)
 
@@ -69,7 +69,7 @@ class TravelSystem(Extension):
         JOIN player_data pd ON pd.playerid = $2
         LEFT JOIN inventory i ON i.playerid = pd.playerid AND i.itemid = l.required_item_id
         WHERE (l.parentlocationid = $1 OR l.locationid = $1)
-        AND (l.xp_requirement IS NULL OR pd.xp >= l.xp_requirement)  -- Check XP requirement
+        AND (l.xp_requirement IS NULL OR pd.xp >= l.xp_requirement)
         AND (l.required_item_id IS NULL OR i.itemid IS NOT NULL)
         AND NOT EXISTS (
             SELECT 1
@@ -91,7 +91,6 @@ class TravelSystem(Extension):
             results = await conn.fetch(query, current_location_id, player_id)
             return [{'locationid': row['locationid'], 'name': row['name'], 'description': row['description']} for row in results] if results else []
 
-
     async def update_location(self, player_id, location_id):
         async with self.bot.db.pool.acquire() as conn:
             query = "UPDATE public.player_data SET current_location = $1 WHERE playerid = $2"
@@ -100,7 +99,7 @@ class TravelSystem(Extension):
     async def display_locations(self, ctx, current_location_id):
         player_id = await self.get_player_id(ctx.author.id)
         accessible_locations = await self.get_connected_locations(current_location_id, player_id)
-    
+        
         if not accessible_locations:
             await ctx.send("No accessible locations found.", ephemeral=True)
             return
@@ -112,7 +111,6 @@ class TravelSystem(Extension):
             color=0x00FF00
         )
         await ctx.send(embed=embed)
-
 
 def setup(bot):
     TravelSystem(bot)
