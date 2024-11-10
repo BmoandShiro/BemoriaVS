@@ -9,26 +9,42 @@ class Finn(NPCBase, Extension):
         self.db = bot.db
 
     async def interact(self, ctx: SlashContext, player_id):
-        # Finn's specific interaction logic
+        # Check if the player already has a fishing rod from Finn
+        fishing_rod_id = await self.db.fetchval("SELECT itemid FROM items WHERE name = 'Beginner Fishing Rod'")
+
+        bait_id = await self.db.fetchval("SELECT itemid FROM items WHERE name = 'Basic Bait'")
+
         has_fishing_gear = await self.db.fetchval("""
-            SELECT COUNT(*) FROM inventory WHERE playerid = $1 AND itemid = (
-                SELECT itemid FROM items WHERE name = 'Beginner''s Fishing Rod'
-            )
-        """, player_id)
+            SELECT COUNT(*) FROM inventory WHERE playerid = $1 AND itemid = $2
+        """, player_id, fishing_rod_id)
 
         if has_fishing_gear > 0:
             await ctx.send("Finn says: 'You already have a fishing rod, young angler! Go catch some fish!'")
             return
 
-        # Add Beginner's Fishing Rod and Basic Bait to inventory
-        fishing_rod_id = await self.db.fetchval("SELECT itemid FROM items WHERE name = 'Beginner''s Fishing Rod'")
-        bait_id = await self.db.fetchval("SELECT itemid FROM items WHERE name = 'Basic Bait'")
-
+        # Add Beginner's Fishing Rod
         await self.db.execute("""
-            INSERT INTO inventory (playerid, itemid, quantity, isequipped, slot) VALUES 
-            ($1, $2, 1, false, NULL),
-            ($1, $3, 10, false, NULL)
-        """, player_id, fishing_rod_id, bait_id)
+            INSERT INTO inventory (playerid, itemid, quantity, isequipped, slot)
+            VALUES ($1, $2, 1, false, NULL)
+        """, player_id, fishing_rod_id)
+
+        # Add Basic Bait and check for stacking
+        existing_bait = await self.db.fetchrow("""
+            SELECT inventoryid, quantity FROM inventory WHERE playerid = $1 AND itemid = $2
+        """, player_id, bait_id)
+
+        if existing_bait:
+            # Update the quantity if bait already exists in inventory
+            new_quantity = existing_bait['quantity'] + 10
+            await self.db.execute("""
+                UPDATE inventory SET quantity = $1 WHERE inventoryid = $2
+            """, new_quantity, existing_bait['inventoryid'])
+        else:
+            # Add bait as a new item if it doesn't exist in inventory
+            await self.db.execute("""
+                INSERT INTO inventory (playerid, itemid, quantity, isequipped, slot)
+                VALUES ($1, $2, 10, false, NULL)
+            """, player_id, bait_id)
 
         # Send a message to the player
         await ctx.send(
