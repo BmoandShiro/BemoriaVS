@@ -1,6 +1,9 @@
-import interactions
+import re  
 from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command, SlashContext, component_callback, ComponentContext
+from functools import partial
 import logging
+import math
+
 
 class playerinterface(Extension):
     def __init__(self, bot):
@@ -16,15 +19,16 @@ class playerinterface(Extension):
         embed.add_field(name="Mana", value=str(mana), inline=True)
         embed.add_field(name="Stamina", value=str(stamina), inline=True)
 
-        # Static buttons
+        # Static buttons (including the new "Travel To" button)
         static_buttons = [
             Button(style=ButtonStyle.PRIMARY, label="Travel", custom_id="travel"),
             Button(style=ButtonStyle.PRIMARY, label="Skills", custom_id="skills"),
             Button(style=ButtonStyle.PRIMARY, label="View Stats", custom_id="view_stats"),
             Button(style=ButtonStyle.PRIMARY, label="Inventory", custom_id="inventory"),
-            Button(style=ButtonStyle.PRIMARY, label="Quests", custom_id="quests")
+            Button(style=ButtonStyle.PRIMARY, label="Quests", custom_id="quests"),
+            Button(style=ButtonStyle.PRIMARY, label="Travel To", custom_id="travel_to")  # New button added here
         ]
-
+    
         # Get dynamic buttons based on the current location
         dynamic_buttons = await self.get_location_based_buttons(current_location_id)
 
@@ -32,7 +36,7 @@ class playerinterface(Extension):
         all_buttons = static_buttons + dynamic_buttons
         button_rows = [all_buttons[i:i + 5] for i in range(0, len(all_buttons), 5)]
 
-        # Send the embed with buttons arranged in rows
+        # Send the embed with the buttons arranged in rows
         await ctx.send(embeds=[embed], components=button_rows)
 
     async def get_location_based_buttons(self, location_id):
@@ -168,8 +172,58 @@ class playerinterface(Extension):
 
     @component_callback("quests")
     async def quests_button_handler(self, ctx: ComponentContext):
-        # Add logic to handle the quests button, possibly calling a quest system
         await ctx.send("Quest functionality coming soon!", ephemeral=True)
+
+    @component_callback("travel_to")
+    async def travel_to_button_handler(self, ctx: ComponentContext):
+        # This will be the callback for the "Travel To" button
+        await ctx.send("Please select a destination using the travel command.", ephemeral=True)
+        
+    @component_callback("travel_to")
+    async def travel_to_button_handler(self, ctx: ComponentContext):
+        db = self.bot.db
+        player_id = await db.get_or_create_player(ctx.author.id)
+        player_data = await db.fetch_player_details(player_id)
+
+        if player_data:
+            current_location_id = player_data['current_location']
+        
+            # Fetch accessible locations
+            accessible_locations = await db.fetch_accessible_locations(current_location_id)
+        
+            if not accessible_locations:
+                await ctx.send("No locations available to travel to from here.", ephemeral=True)
+                return
+
+            # Create buttons for each accessible location
+            location_buttons = [
+                Button(style=ButtonStyle.PRIMARY, label=location['name'], custom_id=f"travel_{location['locationid']}")
+                for location in accessible_locations
+            ]
+
+            # Arrange buttons in rows of up to 5
+            button_rows = [location_buttons[i:i + 5] for i in range(0, len(location_buttons), 5)]
+
+            # Send the location buttons
+            await ctx.send("Please select a destination:", components=button_rows, ephemeral=True)
+        else:
+            await ctx.send("Your player data could not be found.", ephemeral=True)
+
+    # Add handlers for each travel destination button dynamically
+    @component_callback(re.compile(r"^travel_\d+$"))
+    async def travel_destination_handler(self, ctx: ComponentContext):
+        location_id = int(ctx.custom_id.split("_")[1])
+        db = self.bot.db
+        player_id = await db.get_or_create_player(ctx.author.id)
+    
+        # Update the player's location
+        await db.update_player_location(player_id, location_id)
+        new_location_name = await db.fetchval("SELECT name FROM locations WHERE locationid = $1", location_id)
+    
+        await ctx.send(f"You have traveled to {new_location_name}.", ephemeral=True)
+        # Optionally, you can reload the UI here to reflect the new location
+        player_data = await db.fetch_player_details(player_id)
+        await self.send_player_ui(ctx, player_data['name'], player_data['health'], player_data['mana'], player_data['stamina'], player_data['current_location'])
 
 # Setup function to load this as an extension
 def setup(bot):

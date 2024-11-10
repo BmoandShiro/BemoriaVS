@@ -115,10 +115,11 @@ class Database:
     async def update_player_location(self, player_id, new_location_id):
         async with self.pool.acquire() as conn:
             await conn.execute("""
-            UPDATE players
-            SET current_location = $2
-            WHERE playerid = $1
+                UPDATE player_data
+                SET current_location = $2
+                WHERE playerid = $1
             """, player_id, new_location_id)
+
 
 
     async def fetch_player_details(self, player_id):
@@ -219,6 +220,11 @@ class Database:
             player_id, additional_slots
         )
         return f"Inventory capacity increased by {additional_slots} slots."
+    
+    async def fetchval(self, query, *args):
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(query, *args)
+
 
 
 
