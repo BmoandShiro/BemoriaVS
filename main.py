@@ -1,4 +1,4 @@
-from interactions import SlashCommand, Client, Extension 
+from interactions import SlashCommand, Client, Extension, Client, SlashContext, slash_command 
 from charactercreation import setup as cc_setup
 from charactercreation import CharacterCreation
 from PostgreSQLlogic import Database  # Import the Database class
@@ -10,6 +10,8 @@ from GuildConfig import GUILD_IDS
 from Inventory import Inventory
 from inventory_systems import InventorySystem  # Import the InventorySystem wrapper
 from travelsystem import TravelSystem
+#from NPC_Finn import setup as setup_finn
+from NPC_Manager import NPCManager
 
 logging.basicConfig(level=logging.INFO)
 
@@ -40,6 +42,24 @@ bot.inventory_system = inventory_system  # Attach InventorySystem to bot for eas
 # Create and attach the TravelSystem instance to the bot idk why this worked but it did so read into this more
 travel_system = TravelSystem(bot)
 bot.travel_system = travel_system
+
+
+@slash_command(name="talk_to_npc", description="Talk to an NPC.")
+async def talk_to_npc_command(ctx: SlashContext, npc_name: str):
+    """
+    Command to talk to an NPC by name.
+    """
+    NPC_Manager = bot.get_extension("NPCManager")
+    if NPC_Manager:
+        await NPC_Manager.interact_with_npc(ctx, npc_name)
+    else:
+        await ctx.send("NPC Manager is not available.", ephemeral=True)
+
+# Load extensions (including NPCManager)
+bot.load_extension("NPC_Manager")  # This will load the NPC_Manager extension correctly
+
+
+
 
 # Event listener for when the bot has switched from offline to online.
 @bot.event
