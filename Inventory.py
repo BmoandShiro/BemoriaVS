@@ -1,3 +1,6 @@
+from interactions import Button, ButtonStyle, ComponentContext
+
+
 class Inventory:
     def __init__(self, db, player_id):
         self.db = db
@@ -122,13 +125,9 @@ class Inventory:
 
         return "Item unequipped."
 
-    async def view_inventory(self):
-        """
-        Retrieves and displays all items in the player's inventory.
-        Shows item name, type, quantity, equipped status, and slot if equipped.
-        """
+    async def view_inventory(self, ctx):
         items = await self.db.fetch("""
-            SELECT i.name, i.type, inv.quantity, inv.isequipped, inv.slot
+            SELECT i.itemid, i.name, i.type, inv.quantity, inv.isequipped, inv.slot
             FROM inventory inv
             JOIN items i ON inv.itemid = i.itemid
             WHERE inv.playerid = $1
@@ -136,9 +135,9 @@ class Inventory:
         """, self.player_id)
 
         if not items:
-            return "Inventory is empty."
+            return await ctx.send("Inventory is empty.", ephemeral=True)
 
-        # Display formatted inventory
+        # Format and display inventory information
         inventory_list = []
         for item in items:
             equipped_status = "Equipped" if item["isequipped"] else "Not Equipped"
@@ -146,4 +145,3 @@ class Inventory:
             inventory_list.append(f"{item['name']} ({item['type']}): {item['quantity']} - {equipped_status}{slot_info}")
 
         return "\n".join(inventory_list)
-
