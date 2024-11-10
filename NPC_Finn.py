@@ -1,4 +1,4 @@
-from interactions import Extension, SlashContext
+from interactions import Extension, SlashContext, component_callback, ComponentContext, Button, ButtonStyle
 from NPC_Base import NPCBase  # Assuming you have a base NPC class for shared NPC functionality
 
 class Finn(NPCBase, Extension):
@@ -12,7 +12,7 @@ class Finn(NPCBase, Extension):
         # Finn's specific interaction logic
         has_fishing_gear = await self.db.fetchval("""
             SELECT COUNT(*) FROM inventory WHERE playerid = $1 AND itemid = (
-                SELECT itemid FROM items WHERE name = 'Beginner's Fishing Rod'
+                SELECT itemid FROM items WHERE name = 'Beginner''s Fishing Rod'
             )
         """, player_id)
 
@@ -21,7 +21,7 @@ class Finn(NPCBase, Extension):
             return
 
         # Add Beginner's Fishing Rod and Basic Bait to inventory
-        fishing_rod_id = await self.db.fetchval("SELECT itemid FROM items WHERE name = 'Beginner's Fishing Rod'")
+        fishing_rod_id = await self.db.fetchval("SELECT itemid FROM items WHERE name = 'Beginner''s Fishing Rod'")
         bait_id = await self.db.fetchval("SELECT itemid FROM items WHERE name = 'Basic Bait'")
 
         await self.db.execute("""
@@ -34,6 +34,12 @@ class Finn(NPCBase, Extension):
         await ctx.send(
             "Finn says: 'Here, take this fishing rod and some bait! You can use them at Tradewind Stream to catch fish.'"
         )
+        
+     #Add a component callback for the 'talk_to_finn' button
+    @component_callback("talk_to_finn")
+    async def talk_to_finn_button_handler(self, ctx: ComponentContext):
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        await self.interact(ctx, player_id)
 
 # Setup function for the bot to load this as an extension
 def setup(bot):
