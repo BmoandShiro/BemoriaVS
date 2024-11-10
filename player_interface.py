@@ -1,14 +1,12 @@
 import interactions
 from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command, SlashContext, component_callback, ComponentContext
-from functools import partial
 import logging
-import math 
 
 class playerinterface(Extension):
     def __init__(self, bot):
         self.bot = bot
 
-    async def send_player_ui(self, ctx, location_name, health, mana, stamina):
+    async def send_player_ui(self, ctx, location_name, health, mana, stamina, current_location_id):
         embed = Embed(
             title="Player Information",
             description=f"You are currently in {location_name}",
@@ -17,15 +15,42 @@ class playerinterface(Extension):
         embed.add_field(name="Health", value=str(health), inline=True)
         embed.add_field(name="Mana", value=str(mana), inline=True)
         embed.add_field(name="Stamina", value=str(stamina), inline=True)
-        
-        travel_button = Button(style=ButtonStyle.PRIMARY, label="Travel", custom_id="travel")
-        skills_button = Button(style=ButtonStyle.PRIMARY, label="Skills", custom_id="skills")
-        stats_button = Button(style=ButtonStyle.PRIMARY, label="View Stats", custom_id="view_stats")
-        inventory_button = Button(style=ButtonStyle.PRIMARY, label="Inventory", custom_id="inventory")
-        quests_button = Button(style=ButtonStyle.PRIMARY, label="Quests", custom_id="quests")
 
-        await ctx.send(embeds=[embed], components=[travel_button, skills_button, stats_button, inventory_button, quests_button])
-        
+        # Static buttons
+        static_buttons = [
+            Button(style=ButtonStyle.PRIMARY, label="Travel", custom_id="travel"),
+            Button(style=ButtonStyle.PRIMARY, label="Skills", custom_id="skills"),
+            Button(style=ButtonStyle.PRIMARY, label="View Stats", custom_id="view_stats"),
+            Button(style=ButtonStyle.PRIMARY, label="Inventory", custom_id="inventory"),
+            Button(style=ButtonStyle.PRIMARY, label="Quests", custom_id="quests")
+        ]
+
+        # Get dynamic buttons based on the current location
+        dynamic_buttons = await self.get_location_based_buttons(current_location_id)
+
+        # Arrange static and dynamic buttons in rows of up to 5 each
+        all_buttons = static_buttons + dynamic_buttons
+        button_rows = [all_buttons[i:i + 5] for i in range(0, len(all_buttons), 5)]
+
+        # Send the embed with buttons arranged in rows
+        await ctx.send(embeds=[embed], components=button_rows)
+
+    async def get_location_based_buttons(self, location_id):
+        """
+        Fetch location-based commands from the database and create buttons for each command.
+        """
+        db = self.bot.db
+        commands = await db.fetch("""
+            SELECT command_name, button_label, custom_id
+            FROM location_commands
+            WHERE locationid = $1
+        """, location_id)
+
+        buttons = []
+        for command in commands:
+            buttons.append(Button(style=ButtonStyle.PRIMARY, label=command['button_label'], custom_id=command['custom_id']))
+        return buttons
+
     async def send_player_stats(self, ctx, player_id):
         db = self.bot.db
         player_stats = await db.fetch_view_stats(player_id)
@@ -40,7 +65,6 @@ class playerinterface(Extension):
 
             for i, (stat, value) in enumerate(player_stats.items()):
                 if stat != "playerid" and value is not None:
-                    color = 0xFF0000 if value < 0 else 0x00FF00
                     embed.add_field(name=stat.replace("_", " ").title(), value=f"{value}", inline=True)
                     if (i + 1) % 25 == 0:  # Add a new embed if there are 25 fields
                         embeds.append(embed)
@@ -50,7 +74,6 @@ class playerinterface(Extension):
             await ctx.send(embeds=embeds)
         else:
             await ctx.send("Your player stats could not be found.", ephemeral=True)
-
 
     async def send_player_skills(self, ctx, player_id):
         db = self.bot.db
@@ -86,9 +109,6 @@ class playerinterface(Extension):
                 await ctx.send(embeds=embeds[i:i+10])
         else:
             await ctx.send("Your player skills could not be found.", ephemeral=True)
-            
-
-            
 
     @slash_command(name="playerui", description="Reload the player UI menu")
     async def reload_ui_command(self, ctx):
@@ -97,26 +117,29 @@ class playerinterface(Extension):
         player_data = await db.fetch_player_details(player_id)
 
         if player_data:
-            await self.send_player_ui(ctx, 
-                                      player_data['name'], 
-                                      player_data['health'], 
-                                      player_data['mana'], 
-                                      player_data['stamina'])
+            await self.send_player_ui(
+                ctx,
+                player_data['name'],
+                player_data['health'],
+                player_data['mana'],
+                player_data['stamina'],
+                player_data['current_location']
+            )
         else:
             await ctx.send("Your player data could not be found.", ephemeral=True)
-            
+
     @component_callback("view_stats")
     async def view_stats_button_handler(self, ctx: ComponentContext):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
         await self.send_player_stats(ctx, player_id)
-        
+
     @component_callback("skills")
     async def skills_button_handler(self, ctx: ComponentContext):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
         await self.send_player_skills(ctx, player_id)
-        
+
     @component_callback("travel")
     async def travel_button_handler(self, ctx: ComponentContext):
         db = self.bot.db
@@ -132,7 +155,7 @@ class playerinterface(Extension):
                 await ctx.send("Travel system is not available.", ephemeral=True)
         else:
             await ctx.send("Your player data could not be found.", ephemeral=True)
-            
+
     @component_callback("inventory")
     async def inventory_button_handler(self, ctx: ComponentContext):
         db = self.bot.db
@@ -148,10 +171,6 @@ class playerinterface(Extension):
         # Add logic to handle the quests button, possibly calling a quest system
         await ctx.send("Quest functionality coming soon!", ephemeral=True)
 
-
-    # Setup function to load this as an extension
+# Setup function to load this as an extension
 def setup(bot):
     playerinterface(bot)
-
-
-       
