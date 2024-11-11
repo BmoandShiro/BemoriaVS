@@ -207,6 +207,22 @@ class playerinterface(Extension):
             await ctx.send("Please select a destination:", components=button_rows, ephemeral=True)
         else:
             await ctx.send("Your player data could not be found.", ephemeral=True)
+            
+    @component_callback("fish")
+    async def fish_button_handler(self, ctx: ComponentContext):
+        # Get player ID and current location
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        player_data = await self.bot.db.fetch_player_details(player_id)
+        current_location_id = player_data['current_location']
+
+        # Placeholder for tool type selection
+        tool_type = "Shallow"  # Example, using a "Shallow" tool type by default
+
+        # Access FishingModule directly via bot.fishing_module
+        if hasattr(self.bot, "fishing_module"):
+            await self.bot.fishing_module.fish_button_action(current_location_id, tool_type, ctx)
+        else:
+            await ctx.send("Fishing module is not available.", ephemeral=True)
 
     # Add handlers for each travel destination button dynamically
     @component_callback(re.compile(r"^travel_\d+$"))
@@ -223,6 +239,9 @@ class playerinterface(Extension):
         # Optionally, you can reload the UI here to reflect the new location
         player_data = await db.fetch_player_details(player_id)
         await self.send_player_ui(ctx, player_data['name'], player_data['health'], player_data['mana'], player_data['stamina'], player_data['current_location'])
+        
+        
+        
 
 # Setup function to load this as an extension
 def setup(bot):

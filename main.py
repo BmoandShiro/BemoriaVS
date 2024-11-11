@@ -13,8 +13,8 @@ from travelsystem import TravelSystem
 #from NPC_Finn import setup as setup_finn
 from NPC_Manager import NPCManager
 from inventory_systems import setup as inventory_setup
-
-
+#from Fishing import setup as fishing_setup
+from Fishing import FishingModule
 
 logging.basicConfig(level=logging.INFO)
 
@@ -47,6 +47,10 @@ travel_system = TravelSystem(bot)
 bot.travel_system = travel_system
 
 #inventory_setup(bot)
+
+bot.fishing_module = FishingModule(bot)
+#fishing_setup(bot)
+
 
 @slash_command(name="talk_to_npc", description="Talk to an NPC.")
 async def talk_to_npc_command(ctx: SlashContext, npc_name: str):
