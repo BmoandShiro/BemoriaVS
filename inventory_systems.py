@@ -1,10 +1,10 @@
 from Inventory import Inventory  # Ensure Inventory class has a view_inventory method
-from interactions import component_callback, Button, ButtonStyle, ComponentContext, StringSelectMenu, StringSelectOption
+from interactions import Extension, component_callback, Button, ButtonStyle, ComponentContext, StringSelectMenu, StringSelectOption
 
-
-class InventorySystem:
-    def __init__(self, db):
-        self.db = db  # Store the database instance
+class InventorySystem(Extension):
+    def __init__(self, bot):
+        self.bot = bot
+        self.db = bot.db  # Access the database through the bot instance
 
     def get_inventory_for_player(self, player_id):
         return Inventory(self.db, player_id)
@@ -79,3 +79,7 @@ class InventorySystem:
         inventory = self.get_inventory_for_player(player_id)
         result = await inventory.unequip_item(item_id)
         await ctx.send(result, ephemeral=True)
+
+# Setup function to load this as an extension
+def setup(bot):
+    InventorySystem(bot)  # Register the InventorySystem extension

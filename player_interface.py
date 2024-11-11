@@ -162,14 +162,13 @@ class playerinterface(Extension):
 
     @component_callback("inventory")
     async def inventory_button_handler(self, ctx: ComponentContext):
-        db = self.bot.db
-        player_id = await db.get_or_create_player(ctx.author.id)
-        inventory_system = self.bot.inventory_system  # Access the Inventory system instance
+        inventory_system = self.bot.inventory_system  # Access InventorySystem directly
         if inventory_system:
+            player_id = await self.bot.db.get_or_create_player(ctx.author.id)
             await inventory_system.display_inventory(ctx, player_id)
         else:
             await ctx.send("Inventory system is not available.", ephemeral=True)
-
+            
     @component_callback("quests")
     async def quests_button_handler(self, ctx: ComponentContext):
         await ctx.send("Quest functionality coming soon!", ephemeral=True)

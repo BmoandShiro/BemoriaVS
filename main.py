@@ -12,6 +12,9 @@ from inventory_systems import InventorySystem  # Import the InventorySystem wrap
 from travelsystem import TravelSystem
 #from NPC_Finn import setup as setup_finn
 from NPC_Manager import NPCManager
+from inventory_systems import setup as inventory_setup
+
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -36,13 +39,14 @@ cc_setup(bot)  # Pass both the bot and db instances to the setup function
 #ts_setup(bot) #had to take this out for now to make it work idk why i need to learn this part better still
 
 # Create and attach InventorySystem to the bot
-inventory_system = InventorySystem(db)
-bot.inventory_system = inventory_system  # Attach InventorySystem to bot for easy access
+inventory_system = InventorySystem(bot)
+bot.inventory_system = inventory_system
 
 # Create and attach the TravelSystem instance to the bot idk why this worked but it did so read into this more
 travel_system = TravelSystem(bot)
 bot.travel_system = travel_system
 
+#inventory_setup(bot)
 
 @slash_command(name="talk_to_npc", description="Talk to an NPC.")
 async def talk_to_npc_command(ctx: SlashContext, npc_name: str):
