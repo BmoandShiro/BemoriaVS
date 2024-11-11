@@ -62,9 +62,15 @@ class InventorySystem(Extension):
         if not items:
             return await ctx.send("No items currently equipped.", ephemeral=True)
 
-        # Create a select menu with equipped items
+        # Create the list of options for unequipping items
         options = [StringSelectOption(label=item['name'], value=str(item['itemid'])) for item in items]
-        unequip_select = StringSelectMenu(custom_id="select_unequip_item", options=options, placeholder="Select an item to unequip")
+
+        # Initialize StringSelectMenu without options
+        unequip_select = StringSelectMenu(custom_id="select_unequip_item", placeholder="Select an item to unequip")
+    
+        # Add options to the menu after initialization
+        unequip_select.options = options
+
         await ctx.send("Choose an item to unequip:", components=[unequip_select], ephemeral=True)
 
     @component_callback("select_equip_item")
