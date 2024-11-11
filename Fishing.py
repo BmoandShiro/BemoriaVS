@@ -9,25 +9,28 @@ class FishingModule:
         self.bot = bot
         self.db = bot.db  # Access the database instance directly from the bot
 
-    async def get_player_xp_level(self, player_id):
-        xp_level = await self.db.fetchval("SELECT fishing_xp FROM player_data WHERE playerid = $1", player_id)
+    async def get_player_xp_level(self):
+        # Retrieve fishing XP from player_skills_xp instead of player_data
+        xp_level = await self.db.fetchval("SELECT fishing_xp FROM player_skills_xp WHERE playerid = $1", self.player_id)
         return xp_level or 1  # Default to level 1 if no XP found
 
+
     async def fetch_fish_for_location(self, location, tool_type):
+        print(f"Fetching fish for location: '{location}', tool_type: '{tool_type}'")  # Debugging output
+
+        # Convert location to a string to match the expected input type
         location = str(location)
-        print(f"Fetching fish for location: {location}, tool_type: {tool_type}")  # Debug output
-        
+
         query = """
             SELECT * FROM fish
             WHERE location = $1 AND rodtype = $2
         """
         fish_list = await self.db.fetch(query, location, tool_type)
-        print(f"Fish list retrieved: {fish_list}")  # Verify the retrieved fish list
-        
-        # Check if drop_modifier exists; if not, set default
-        for fish in fish_list:
-            fish["drop_modifier"] = fish.get("drop_modifier", 1.0)
-        
+    
+        # Convert each fish record to a dictionary and set default drop_modifier if missing
+        fish_list = [{**dict(fish), "drop_modifier": fish.get("drop_modifier", 1.0)} for fish in fish_list]
+    
+        print(f"Fish list retrieved: {fish_list}")  # Check if any results are retrieved
         return fish_list
 
     def roll_for_rarity(self, player_xp):
@@ -111,30 +114,37 @@ class FishingModule:
         return result
 
     async def fish_button_action(self, location, ctx):
-        # Get the player ID
-        player_id = await self.db.get_or_create_player(ctx.author.id)
-    
-        # Fetch the equipped fishing tool's specific rod type from items table
-        tool = await self.db.fetchrow("""
-            SELECT it.rodtype FROM inventory inv
-            JOIN items it ON inv.itemid = it.itemid
-            WHERE inv.playerid = $1 AND inv.isequipped = true AND it.type = 'Tool'
-        """, player_id)
-    
-        if not tool or not tool['rodtype']:
-            await ctx.send("You need to equip a fishing tool with a specified rod type to fish.")
-            return
-    
-        # Use the equipped tool's rodtype (e.g., 'Shallow', 'Deep', etc.) as tool_type
-        tool_type = tool['rodtype']
-    
-        # Attempt to catch a fish with the specified location and tool type
-        result = await self.attempt_catch_fish(player_id, location, tool_type)
-    
-        if isinstance(result, str):  # Error message if no fish are available
-            await ctx.send(result)
-        else:
-            await ctx.send(
-                f"You caught a {result['rarity'].capitalize()} {result['name']}! "
-                f"Length: {result['length']} cm, Weight: {result['weight']} kg."
-            )
+        try:
+            # Get the player ID
+            player_id = await self.db.get_or_create_player(ctx.author.id)
+        
+            # Fetch the equipped fishing tool's specific rod type from items table
+            tool = await self.db.fetchrow("""
+                SELECT it.rodtype FROM inventory inv
+                JOIN items it ON inv.itemid = it.itemid
+                WHERE inv.playerid = $1 AND inv.isequipped = true AND it.type = 'Tool'
+            """, player_id)
+        
+            print(f"Equipped Tool: {tool}")  # Debug output
+
+            if not tool or not tool['rodtype']:
+                await ctx.send("You need to equip a fishing tool with a specified rod type to fish.")
+                return
+        
+            tool_type = tool['rodtype']
+            print(f"Tool Type for Fishing: {tool_type}")  # Debug output
+        
+            # Attempt to catch a fish with the specified location and tool type
+            result = await self.attempt_catch_fish(player_id, location, tool_type)
+        
+            if isinstance(result, str):  # Error message if no fish are available
+                await ctx.send(result)
+            else:
+                await ctx.send(
+                    f"You caught a {result['rarity'].capitalize()} {result['name']}! "
+                    f"Length: {result['length']} cm, Weight: {result['weight']} kg."
+                )
+
+        except Exception as e:
+            print(f"Error during fishing interaction: {e}")
+            await ctx.send(f"An error occurred: {e}")
