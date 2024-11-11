@@ -8,11 +8,26 @@ class FishingModule:
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db  # Access the database instance directly from the bot
+        
+    async def calculate_catch_probability(self, fish_list):
+        # Calculate probabilities based on catch_probability and drop_modifier for each fish
+        probabilities = {
+            fish['name']: float(fish['catch_probability']) * float(fish['drop_modifier']) for fish in fish_list
+        }
+        total_probability = sum(probabilities.values())
+    
+        # Normalize probabilities so they sum to 1
+        normalized_probabilities = {name: prob / total_probability for name, prob in probabilities.items()}
+    
+        return normalized_probabilities
 
-    async def get_player_xp_level(self):
-        # Retrieve fishing XP from player_skills_xp instead of player_data
-        xp_level = await self.db.fetchval("SELECT fishing_xp FROM player_skills_xp WHERE playerid = $1", self.player_id)
+
+
+    async def get_player_xp_level(self, player_id):
+        # Retrieve fishing XP from player_skills_xp table
+        xp_level = await self.db.fetchval("SELECT fishing_xp FROM player_skills_xp WHERE playerid = $1", player_id)
         return xp_level or 1  # Default to level 1 if no XP found
+
 
 
     async def fetch_fish_for_location(self, location, tool_type):
@@ -65,53 +80,64 @@ class FishingModule:
     def roll_for_fish(self, fish_list, rarity):
         # Filter fish by the rarity tier
         filtered_fish = [fish for fish in fish_list if fish["qualitytier"].lower() == rarity]
-        
+    
         if not filtered_fish:
             return None
 
         # Calculate relative weights with drop_modifier for fine-tuning
-        total_weight = sum(fish["catch_probability"] * fish["drop_modifier"] for fish in filtered_fish)
+        total_weight = sum(float(fish["catch_probability"]) * float(fish["drop_modifier"]) for fish in filtered_fish)
         roll = random.uniform(0, total_weight)
-        
+    
         current_weight = 0
         for fish in filtered_fish:
-            current_weight += fish["catch_probability"] * fish["drop_modifier"]
+            current_weight += float(fish["catch_probability"]) * float(fish["drop_modifier"])
             if roll <= current_weight:
                 print(f"Selected fish: {fish['name']} with rarity: {rarity}")  # Debug output
                 return fish
 
+
     async def attempt_catch_fish(self, player_id, location, tool_type):
-        print(f"Attempting to catch fish for player: {player_id} at location: {location} with tool: {tool_type}")  # Debug output
-        
         fish_list = await self.fetch_fish_for_location(location, tool_type)
         if not fish_list:
-            print("No fish available.")  # Debug output
             return "No fish available for this location and tool type."
 
-        player_xp = await self.get_player_xp_level(player_id)
-        print(f"Player XP Level: {player_xp}")  # Debug output
+        xp_level = await self.get_player_xp_level(player_id)
+        catch_time = max(1, 10 - xp_level)
+        time.sleep(catch_time)
 
-        # Step 1: Roll for rarity
-        rarity = self.roll_for_rarity(player_xp)
-        
-        # Step 2: Roll for fish within the selected rarity
-        fish = self.roll_for_fish(fish_list, rarity)
-        if not fish:
-            print("No fish found in the rolled rarity.")  # Debug output
-            return "No fish of that rarity available."
+        # Roll for fish rarity
+        rarity = self.roll_for_rarity(xp_level)
+        caught_fish = self.roll_for_fish(fish_list, rarity)
+    
+        if not caught_fish:
+            return "No fish matched the rolled rarity."
 
-        # Step 3: Randomize length and weight within specified range
-        length = random.uniform(fish['minlength'], fish['maxlength'])
-        weight = random.uniform(fish['minweight'], fish['maxweight'])
+        # Convert `Decimal` to `float` for length and weight
+        length = random.uniform(float(caught_fish['minlength']), float(caught_fish['maxlength']))
+        weight = random.uniform(float(caught_fish['minweight']), float(caught_fish['maxweight']))
+    
+        xp_gained = caught_fish.get('xp_gained', 10)
+        await self.add_fishing_xp(player_id, xp_gained)
 
-        result = {
-            "name": fish["name"],
-            "rarity": rarity,
+        return {
+            "name": caught_fish['name'],
             "length": round(length, 2),
-            "weight": round(weight, 2)
+            "weight": round(weight, 2),
+            "xp_gained": xp_gained,
+            "rarity": rarity
         }
-        print(f"Catch result: {result}")  # Debug output
-        return result
+
+
+
+    async def add_fishing_xp(self, player_id, xp_gained):
+        """Update fishing XP for the player"""
+        await self.db.execute("""
+            UPDATE player_skills_xp
+            SET fishing_xp = fishing_xp + $1
+            WHERE playerid = $2
+        """, xp_gained, player_id)
+
+
 
     async def fish_button_action(self, location, ctx):
         try:
@@ -125,26 +151,29 @@ class FishingModule:
                 WHERE inv.playerid = $1 AND inv.isequipped = true AND it.type = 'Tool'
             """, player_id)
         
-            print(f"Equipped Tool: {tool}")  # Debug output
-
             if not tool or not tool['rodtype']:
                 await ctx.send("You need to equip a fishing tool with a specified rod type to fish.")
                 return
         
             tool_type = tool['rodtype']
-            print(f"Tool Type for Fishing: {tool_type}")  # Debug output
         
             # Attempt to catch a fish with the specified location and tool type
-            result = await self.attempt_catch_fish(player_id, location, tool_type)
-        
+            result = await self.attempt_catch_fish(player_id, location, tool_type)  # Pass player_id
+
             if isinstance(result, str):  # Error message if no fish are available
                 await ctx.send(result)
             else:
                 await ctx.send(
                     f"You caught a {result['rarity'].capitalize()} {result['name']}! "
-                    f"Length: {result['length']} cm, Weight: {result['weight']} kg."
+                    f"Length: {result['length']} cm, Weight: {result['weight']} kg. "
+                    f"XP Gained: {result['xp_gained']}."
                 )
 
         except Exception as e:
             print(f"Error during fishing interaction: {e}")
             await ctx.send(f"An error occurred: {e}")
+            
+
+    
+
+
