@@ -1,5 +1,5 @@
 from Inventory import Inventory  # Ensure Inventory class has a view_inventory method
-from interactions import Extension, component_callback, Button, ButtonStyle, ComponentContext, StringSelectMenu, StringSelectOption
+from interactions import Extension, component_callback, Button, ButtonStyle, ComponentContext, StringSelectMenu, StringSelectOption, OptionType
 
 class InventorySystem(Extension):
     def __init__(self, bot):
@@ -36,11 +36,18 @@ class InventorySystem(Extension):
         if not items:
             return await ctx.send("No items available to equip.", ephemeral=True)
 
-        # Create a select menu with unequipped items
+        # Create the list of options
         options = [StringSelectOption(label=item['name'], value=str(item['itemid'])) for item in items]
-        equip_select = StringSelectMenu(custom_id="select_equip_item", options=options, placeholder="Select an item to equip")
+
+        # Initialize the StringSelectMenu without options
+        equip_select = StringSelectMenu(custom_id="select_equip_item", placeholder="Select an item to equip")
+    
+        # Manually add the options to the menu after initialization
+        equip_select.options = options
+
         await ctx.send("Choose an item to equip:", components=[equip_select], ephemeral=True)
 
+        
     @component_callback("unequip_item")
     async def unequip_item_handler(self, ctx: ComponentContext):
         player_id = await self.db.get_or_create_player(ctx.author.id)
