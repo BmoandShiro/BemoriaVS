@@ -105,19 +105,29 @@ class FishingModule:
         catch_time = max(1, 10 - xp_level)
         time.sleep(catch_time)
 
-        # Roll for fish rarity
         rarity = self.roll_for_rarity(xp_level)
         caught_fish = self.roll_for_fish(fish_list, rarity)
     
         if not caught_fish:
             return "No fish matched the rolled rarity."
 
-        # Convert `Decimal` to `float` for length and weight
         length = random.uniform(float(caught_fish['minlength']), float(caught_fish['maxlength']))
         weight = random.uniform(float(caught_fish['minweight']), float(caught_fish['maxweight']))
-    
         xp_gained = caught_fish.get('xp_gained', 10)
         await self.add_fishing_xp(player_id, xp_gained)
+
+        # Insert the caught fish into `caught_fish` table
+        caught_fish_id = await self.db.fetchval("""
+            INSERT INTO caught_fish (player_id, fish_name, length, weight, rarity, xp_gained)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            RETURNING id
+        """, player_id, caught_fish['name'], round(length, 2), round(weight, 2), rarity, xp_gained)
+
+        # Insert the caught fish into `inventory` table
+        await self.db.execute("""
+            INSERT INTO inventory (playerid, caught_fish_id, quantity, isequipped)
+            VALUES ($1, $2, 1, false)
+        """, player_id, caught_fish_id)
 
         return {
             "name": caught_fish['name'],
