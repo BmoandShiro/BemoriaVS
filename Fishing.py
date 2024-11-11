@@ -26,7 +26,7 @@ class FishingModule:
 
     async def calculate_catch_probability(self, fish_list):
         probabilities = {
-            fish['name']: fish.get('catch_probability', 0.1) for fish in fish_list
+            fish['Catfish']: fish.get('catch_probability', 1.0) for fish in fish_list
         }
         total_prob = sum(probabilities.values())
         normalized_probabilities = {name: prob / total_prob for name, prob in probabilities.items()}
