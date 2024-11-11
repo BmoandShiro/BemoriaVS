@@ -145,22 +145,39 @@ class Inventory:
 
         return "Item unequipped."
 
-    async def view_inventory(self, ctx):
-        items = await self.db.fetch("""
-            SELECT i.itemid, i.name, i.type, inv.quantity, inv.isequipped, inv.slot
+    async def view_inventory(self, ctx, player_id):
+        # Fetch inventory data, including both regular items and caught fish entries
+        inventory_entries = await self.db.fetch("""
+            SELECT inv.inventoryid, inv.quantity, inv.isequipped, 
+                   i.name AS item_name, cf.fish_name AS fish_name, cf.length, cf.weight, cf.rarity
             FROM inventory inv
-            JOIN items i ON inv.itemid = i.itemid
+            LEFT JOIN items i ON inv.itemid = i.itemid
+            LEFT JOIN caught_fish cf ON inv.caught_fish_id = cf.id
             WHERE inv.playerid = $1
-            ORDER BY inv.isequipped DESC, i.type, i.name
-        """, self.player_id)
+        """, player_id)
 
-        if not items:
-            return await ctx.send("Inventory is empty.", ephemeral=True)
+        # Initialize display content and components list
+        inventory_display = ""
+        components = []
 
-        inventory_list = []
-        for item in items:
-            equipped_status = "Equipped" if item["isequipped"] else "Not Equipped"
-            slot_info = f" in {item['slot']}" if item["isequipped"] and item["slot"] else ""
-            inventory_list.append(f"{item['name']} ({item['type']}): {item['quantity']} - {equipped_status}{slot_info}")
+        for entry in inventory_entries:
+            if entry["item_name"]:  # Regular item
+                item_display = f"{entry['item_name']} (x{entry['quantity']})"
+                if entry["isequipped"]:
+                    item_display += " - Equipped"
+                    components.append#(Button(style=ButtonStyle.RED, label="Unequip", custom_id=f"unequip_{entry['inventoryid']}"))
+                else:
+                    components.append#(Button(style=ButtonStyle.GREEN, label="Equip", custom_id=f"equip_{entry['inventoryid']}"))
+                inventory_display += item_display + "\n"
 
-        return "\n".join(inventory_list)
+            elif entry["fish_name"]:  # Caught fish entry, no equip/unequip buttons
+                fish_display = (f"{entry['fish_name']} (Rarity: {entry['rarity']}, "
+                                f"Length: {entry['length']} cm, Weight: {entry['weight']} kg)")
+                inventory_display += fish_display + "\n"
+
+        # Send the inventory content with buttons only for equippable items
+        await ctx.send(
+            content=inventory_display or "Inventory is empty.",
+            components=components if components else None
+        )
+

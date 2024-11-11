@@ -11,7 +11,7 @@ class InventorySystem(Extension):
 
     async def display_inventory(self, ctx, player_id):
         inventory = self.get_inventory_for_player(player_id)
-        inventory_view = await inventory.view_inventory(ctx)
+        inventory_view = await inventory.view_inventory(ctx, player_id)
 
         equip_button = Button(style=ButtonStyle.SUCCESS, label="Equip Item", custom_id="equip_item")
         unequip_button = Button(style=ButtonStyle.DANGER, label="Unequip Item", custom_id="unequip_item")
