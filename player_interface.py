@@ -214,17 +214,12 @@ class playerinterface(Extension):
         player_id = await self.bot.db.get_or_create_player(ctx.author.id)
         player_data = await self.bot.db.fetch_player_details(player_id)
         current_location_id = player_data['current_location']
+    
+        # Call fish_button_action with location and ctx
+        await self.bot.fishing_module.fish_button_action(current_location_id, ctx)
+        # Add handlers for each travel destination button dynamically
+        
 
-        # Placeholder for tool type selection
-        tool_type = "Shallow"  # Example, using a "Shallow" tool type by default
-
-        # Access FishingModule directly via bot.fishing_module
-        if hasattr(self.bot, "fishing_module"):
-            await self.bot.fishing_module.fish_button_action(current_location_id, tool_type, ctx)
-        else:
-            await ctx.send("Fishing module is not available.", ephemeral=True)
-
-    # Add handlers for each travel destination button dynamically
     @component_callback(re.compile(r"^travel_\d+$"))
     async def travel_destination_handler(self, ctx: ComponentContext):
         location_id = int(ctx.custom_id.split("_")[1])

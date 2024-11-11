@@ -110,18 +110,31 @@ class FishingModule:
         print(f"Catch result: {result}")  # Debug output
         return result
 
-    async def fish_button_action(self, location, tool_type, ctx):
-        try:
-            player_id = await self.db.get_or_create_player(ctx.author.id)
-            result = await self.attempt_catch_fish(player_id, location, tool_type)
-            
-            if isinstance(result, str):  # Error message if no fish are available
-                await ctx.send(result)
-            else:
-                await ctx.send(
-                    f"You caught a {result['rarity'].capitalize()} {result['name']}! "
-                    f"Length: {result['length']} cm, Weight: {result['weight']} kg."
-                )
-        except Exception as e:
-            print(f"Error during fish interaction: {e}")
-            await ctx.send("An error occurred while attempting to fish. Please try again later.", ephemeral=True)
+    async def fish_button_action(self, location, ctx):
+        # Get the player ID
+        player_id = await self.db.get_or_create_player(ctx.author.id)
+    
+        # Fetch the equipped fishing tool's specific rod type from items table
+        tool = await self.db.fetchrow("""
+            SELECT it.rodtype FROM inventory inv
+            JOIN items it ON inv.itemid = it.itemid
+            WHERE inv.playerid = $1 AND inv.isequipped = true AND it.type = 'Tool'
+        """, player_id)
+    
+        if not tool or not tool['rodtype']:
+            await ctx.send("You need to equip a fishing tool with a specified rod type to fish.")
+            return
+    
+        # Use the equipped tool's rodtype (e.g., 'Shallow', 'Deep', etc.) as tool_type
+        tool_type = tool['rodtype']
+    
+        # Attempt to catch a fish with the specified location and tool type
+        result = await self.attempt_catch_fish(player_id, location, tool_type)
+    
+        if isinstance(result, str):  # Error message if no fish are available
+            await ctx.send(result)
+        else:
+            await ctx.send(
+                f"You caught a {result['rarity'].capitalize()} {result['name']}! "
+                f"Length: {result['length']} cm, Weight: {result['weight']} kg."
+            )
