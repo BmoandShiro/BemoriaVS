@@ -2,6 +2,8 @@ from interactions import Extension, SlashContext, component_callback, ComponentC
 from NPC_Base import NPCBase  # Assuming you have a base NPC class for shared NPC functionality
 import logging
 import re
+from Utility import send_quest_indicator
+
 
 class Finn(NPCBase, Extension):
     def __init__(self, bot):
@@ -28,7 +30,7 @@ class Finn(NPCBase, Extension):
             if not player_quest:
                 # Offer the quest to the player
                 await ctx.send(
-                    "Finn says: 'Ah, you seem capable! I have a task for you. Gather 5 rare fish for me, and Ill make it worth your while. What do you say?'",
+                    "Finn says: 'Ah, you seem capable! I have a task for you. Gather 5 rare fish for me, and I'll make it worth your while. What do you say?'",
                     components=[Button(style=ButtonStyle.SUCCESS, label="Accept Quest", custom_id=f"accept_finn_quest_{ctx.author.id}")]
                 )
             else:
@@ -59,10 +61,30 @@ class Finn(NPCBase, Extension):
                 VALUES ($1, $2, 10, false, NULL)
             """, player_id, bait_id)
 
-        # Send a message to the player
+        # Send a message to the player about the new gear
         await ctx.send(
             "Finn says: 'Here, take this fishing rod and some bait! You can use them at Tradewind Stream to catch fish.'"
         )
+
+        # Offer the quest to the player if they have the new fishing gear but do not have the quest yet
+        player_quest = await self.db.fetch("""
+            SELECT * FROM player_quests WHERE player_id = $1 AND quest_id = 1
+        """, player_id)
+
+        if not player_quest:
+            # Insert quest into player_quests table and send indicator
+            await self.db.execute("""
+                INSERT INTO player_quests (player_id, quest_id, status, progress)
+                VALUES ($1, 1, 'in_progress', '{"rare_fish_collected": 0}'::jsonb)
+            """, player_id)
+
+            # Fetch quest details for the indicator
+            quest_details = await self.db.fetchrow("""
+                SELECT name, description FROM quests WHERE quest_id = $1
+            """, 1)
+
+            # Send the quest indicator
+            await send_quest_indicator(ctx, quest_details['name'], quest_details['description'])
 
     # Add a component callback for the 'talk_to_finn' button
     @component_callback(re.compile(r"^talk_to_finn_\d+$"))

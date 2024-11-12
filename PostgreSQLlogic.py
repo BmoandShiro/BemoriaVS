@@ -13,12 +13,15 @@ class Database:
         self.pool = await asyncpg.create_pool(dsn=self.dsn)
         logging.info("Database connection pool created successfully")
         
-    async def close(self):
-        await self.pool.close()
+    async def close_pool(self):
+        if self.pool:
+            await self.pool.close()
+
 
     async def create_pool(self):
-        print("DSN being used:", self.dsn)
-        self.pool = await asyncpg.create_pool(self.dsn)
+        if not self.pool:  # Only create the pool if it doesn't exist
+            self.pool = await asyncpg.create_pool(self.dsn, max_size=30)  # Limit max connections
+
     async def fetch_races(self):
         if self.pool is None:
             await self.create_pool()  # Make sure the pool is created before using it

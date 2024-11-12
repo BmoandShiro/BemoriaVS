@@ -1,3 +1,4 @@
+import interactions
 from interactions import SlashCommand, Client, Extension, Client, SlashContext, slash_command, ComponentContext
 from charactercreation import setup as cc_setup
 from charactercreation import CharacterCreation
@@ -15,6 +16,7 @@ from NPC_Manager import NPCManager
 from inventory_systems import setup as inventory_setup
 #from Fishing import setup as fishing_setup
 from Fishing import FishingModule
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -59,22 +61,29 @@ async def patched_send(ctx, *args, **kwargs):
     # Extract the author's display name
     display_name = f"***{ctx.author.display_name}***"  # Bold and Italic
 
-    if 'embeds' in kwargs and kwargs['embeds']:
-        # Add display name at the top of the first embed
+    # Handle 'embeds' in kwargs
+    if 'embeds' in kwargs:
+        if isinstance(kwargs['embeds'], interactions.Embed):
+            # If it's a single Embed, wrap it in a list
+            kwargs['embeds'] = [kwargs['embeds']]
+
+        # Add display name at the top of the description for each embed
         for embed in kwargs['embeds']:
             if embed.description:
                 embed.description = f"{display_name}\n{embed.description}"
             else:
                 embed.description = display_name
 
+    # Handle positional arguments if they contain a list of embeds
     elif len(args) > 0 and isinstance(args[0], list) and all(isinstance(embed, interactions.Embed) for embed in args[0]):
-        # Add display name at the top of the first embed in positional args
+        # Ensure that the list of embeds is processed correctly
         for embed in args[0]:
             if embed.description:
                 embed.description = f"{display_name}\n{embed.description}"
             else:
                 embed.description = display_name
 
+    # Handle plain text messages
     else:
         # For text messages, add the user's name directly
         if 'content' in kwargs:
@@ -84,6 +93,7 @@ async def patched_send(ctx, *args, **kwargs):
 
     # Call the original send method
     await ctx._original_send(*args, **kwargs)
+
 
 # Patch the send method of SlashContext and ComponentContext
 SlashContext._original_send = SlashContext.send
@@ -119,6 +129,10 @@ async def on_ready():
     print(f"Logged in as {bot.me.name}")
     await bot.db.connect()
     await bot.sync_interactions()
+
+
+async def on_shutdown():
+    await bot.db.pool.close()
 
 # Start the bot with the specified token
 bot.start()  # Note: Use start() instead of run()

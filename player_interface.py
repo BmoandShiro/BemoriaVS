@@ -289,10 +289,13 @@ class playerinterface(Extension):
             await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
             return
 
+        await ctx.defer(ephemeral=True)  # Acknowledge the interaction to prevent expiration
+
         player_id = await self.bot.db.get_or_create_player(ctx.author.id)
         player_data = await self.bot.db.fetch_player_details(player_id)
         current_location_id = player_data['current_location']
         await self.bot.fishing_module.fish_button_action(current_location_id, ctx)
+
 
     @component_callback(re.compile(r"^travel_\d+_\d+$"))
     async def travel_destination_handler(self, ctx: ComponentContext):
