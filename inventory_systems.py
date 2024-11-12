@@ -59,9 +59,12 @@ class InventorySystem(Extension):
     @component_callback("drop_item")
     async def drop_item_handler(self, ctx: ComponentContext):
         player_id = await self.db.get_or_create_player(ctx.author.id)
+        # Fetch both items and fish from inventory
         items = await self.db.fetch("""
-            SELECT inv.inventoryid, i.name FROM inventory inv
-            JOIN items i ON inv.itemid = i.itemid
+            SELECT inv.inventoryid, COALESCE(i.name, cf.fish_name) AS name 
+            FROM inventory inv
+            LEFT JOIN items i ON inv.itemid = i.itemid
+            LEFT JOIN caught_fish cf ON inv.caught_fish_id = cf.id
             WHERE inv.playerid = $1
         """, player_id)
 
@@ -74,13 +77,28 @@ class InventorySystem(Extension):
 
         await ctx.send("Choose an item to drop:", components=[drop_select], ephemeral=True)
 
+
     @component_callback("select_drop_item")
     async def select_drop_item_handler(self, ctx: ComponentContext):
         inventory_id = int(ctx.values[0])
         player_id = await self.db.get_or_create_player(ctx.author.id)
-        inventory = self.get_inventory_for_player(player_id)
-        result = await inventory.remove_item_by_inventory_id(inventory_id)
-        await ctx.send(result, ephemeral=True)
+
+        # Find out if the item is a fish or a regular item
+        item = await self.db.fetchrow("""
+            SELECT caught_fish_id FROM inventory WHERE inventoryid = $1 AND playerid = $2
+        """, inventory_id, player_id)
+
+        if item and item["caught_fish_id"]:
+            # If it's a fish, remove it from the inventory first
+            await self.db.execute("DELETE FROM inventory WHERE inventoryid = $1 AND playerid = $2", inventory_id, player_id)
+            # Then remove it from the caught_fish table
+            await self.db.execute("DELETE FROM caught_fish WHERE id = $1", item["caught_fish_id"])
+        else:
+            # If it's not a fish, simply remove it from the inventory table
+            await self.db.execute("DELETE FROM inventory WHERE inventoryid = $1 AND playerid = $2", inventory_id, player_id)
+
+        await ctx.send("Item dropped successfully.", ephemeral=True)
+
 
     @component_callback("select_equip_item")
     async def select_equip_item_handler(self, ctx: ComponentContext):
