@@ -77,27 +77,57 @@ class Finn(NPCBase, Extension):
         # Get or create player
         player_id = await self.bot.db.get_or_create_player(ctx.author.id)
 
-        # Check if the player has the Finn quest in progress
-        quest_status = await self.db.fetchval("""
+        # Check if the player has completed the Finn quest
+        finn_quest_status = await self.db.fetchval("""
             SELECT status FROM player_quests
             WHERE player_id = $1 AND quest_id = 1  -- Assuming quest_id 1 is Finn's quest
         """, player_id)
 
-        if quest_status == 'in_progress':
-            # Check if the player has enough rare fish
+        if finn_quest_status == 'completed':
+            # Check if Dave's quest has already been given to the player
+            dave_quest_status = await self.db.fetchval("""
+                SELECT status FROM player_quests
+                WHERE player_id = $1 AND quest_id = 2  -- Assuming quest_id 2 is Dave's quest
+            """, player_id)
+
+            if not dave_quest_status:
+                # Offer Dave's Fishery quest if it hasn't been given yet
+                await self.offer_dave_quest(ctx, player_id)
+            else:
+                # If Dave's quest has already been given, Finn has nothing new to offer
+                await ctx.send("Finn says: 'Sorry, I don't have anything else for you right now.'")
+            return
+
+        elif finn_quest_status == 'in_progress':
+            # Check if the player has enough rare fish to complete the quest
             has_rare_fish = await self.check_rare_fish(player_id)
 
             if has_rare_fish:
                 # Update quest to complete and provide a reward
                 await self.complete_quest(player_id, 1)
                 await ctx.send("Finn says: 'Thank you for gathering the rare fish! Here is your reward.'")
-                return
+                # After completing Finn's quest, offer Dave's quest
+                await self.offer_dave_quest(ctx, player_id)
             else:
                 await ctx.send("Finn says: 'You already have your task. Go get those rare fish!'")
-                return
+            return
 
         # Proceed with the default interaction if the player does not have the quest yet
         await self.interact(ctx, player_id)
+
+    async def offer_dave_quest(self, ctx, player_id):
+        # Insert the new quest for Dave into the player_quests table
+        await self.db.execute("""
+            INSERT INTO player_quests (player_id, quest_id, status, progress)
+            VALUES ($1, 2, 'in_progress', '{"legendary_fish_collected": 0}')
+        """, player_id)
+
+        # Send the player the dialogue offering Dave's quest
+        await ctx.send("Finn says: 'I've heard of an old man in town named Dave. He used to be a great angler like you but has recently stopped fishing. He devoted his life to the catching legendary fish. Maybe you will see him around town.'")
+
+   
+    
+
 
 
 
