@@ -70,6 +70,28 @@ class Inventory:
         remaining_slots = max_slots - current_item_count
 
         return f"Item removed from inventory. Remaining slots: {remaining_slots}."
+    
+    async def remove_item_by_inventory_id(self, inventory_id):
+        # Fetch item details from inventory to determine if it's a caught fish
+        existing_item = await self.db.fetchrow("""
+            SELECT * FROM inventory WHERE inventoryid = $1 AND playerid = $2
+        """, inventory_id, self.player_id)
+
+        if not existing_item:
+            return "Item not found in inventory."
+
+        # If the item is a caught fish, delete it from both inventory and caught_fish table
+        if existing_item["caught_fish_id"]:
+            await self.db.execute("""
+                DELETE FROM caught_fish WHERE id = $1
+            """, existing_item["caught_fish_id"])
+
+        # Delete the item from the inventory table
+        await self.db.execute("""
+            DELETE FROM inventory WHERE inventoryid = $1
+        """, inventory_id)
+
+        return "Item dropped from inventory."
 
     async def get_tool_belt_capacity(self):
         tool_belt_slots = await self.db.fetchval("""

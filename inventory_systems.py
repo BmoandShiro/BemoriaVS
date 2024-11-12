@@ -15,8 +15,9 @@ class InventorySystem(Extension):
 
         equip_button = Button(style=ButtonStyle.SUCCESS, label="Equip Item", custom_id="equip_item")
         unequip_button = Button(style=ButtonStyle.DANGER, label="Unequip Item", custom_id="unequip_item")
-
-        await ctx.send(content=inventory_view, components=[equip_button, unequip_button], ephemeral=True)
+        drop_button = Button(style=ButtonStyle.DANGER, label="Drop Item", custom_id="drop_item")  
+        
+        await ctx.send(content=inventory_view, components=[equip_button, unequip_button, drop_button], ephemeral=True)
 
     @component_callback("equip_item")
     async def equip_item_handler(self, ctx: ComponentContext):
@@ -53,6 +54,33 @@ class InventorySystem(Extension):
         unequip_select.options = options
 
         await ctx.send("Choose an item to unequip:", components=[unequip_select], ephemeral=True)
+        
+
+    @component_callback("drop_item")
+    async def drop_item_handler(self, ctx: ComponentContext):
+        player_id = await self.db.get_or_create_player(ctx.author.id)
+        items = await self.db.fetch("""
+            SELECT inv.inventoryid, i.name FROM inventory inv
+            JOIN items i ON inv.itemid = i.itemid
+            WHERE inv.playerid = $1
+        """, player_id)
+
+        if not items:
+            return await ctx.send("No items available to drop.", ephemeral=True)
+
+        options = [StringSelectOption(label=item['name'], value=str(item['inventoryid'])) for item in items]
+        drop_select = StringSelectMenu(custom_id="select_drop_item", placeholder="Select an item to drop")
+        drop_select.options = options
+
+        await ctx.send("Choose an item to drop:", components=[drop_select], ephemeral=True)
+
+    @component_callback("select_drop_item")
+    async def select_drop_item_handler(self, ctx: ComponentContext):
+        inventory_id = int(ctx.values[0])
+        player_id = await self.db.get_or_create_player(ctx.author.id)
+        inventory = self.get_inventory_for_player(player_id)
+        result = await inventory.remove_item_by_inventory_id(inventory_id)
+        await ctx.send(result, ephemeral=True)
 
     @component_callback("select_equip_item")
     async def select_equip_item_handler(self, ctx: ComponentContext):
