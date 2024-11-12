@@ -8,7 +8,7 @@ class playerinterface(Extension):
     def __init__(self, bot):
         self.bot = bot
 
-    async def send_player_ui(self, ctx, location_name, health, mana, stamina, current_location_id):
+    async def send_player_ui(self, ctx, location_name, health, mana, stamina, current_location_id, gold_balance):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
         
@@ -24,7 +24,8 @@ class playerinterface(Extension):
         embed.add_field(name="Mana", value=str(mana), inline=True)
         embed.add_field(name="Stamina", value=str(stamina), inline=True)
         embed.add_field(name="Inventory Capacity", value=f"{current_inventory_count}/{max_inventory_capacity}", inline=True)
-
+        embed.add_field(name="Gold", value=f"{gold_balance} gold", inline=True)  # Add gold information here
+        
         user_id = ctx.author.id  # This is the Discord User ID
 
         # Static buttons with user ID in custom_id to link them to the player who requested the UI
@@ -133,7 +134,12 @@ class playerinterface(Extension):
     async def reload_ui_command(self, ctx):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
-        player_data = await db.fetch_player_details(player_id)
+        player_data = await db.fetchrow("""
+            SELECT pd.health, pd.mana, pd.stamina, l.name, pd.current_location, pd.gold_balance
+            FROM player_data pd
+            JOIN locations l ON l.locationid = pd.current_location
+            WHERE pd.playerid = $1
+        """, player_id)
 
         if player_data:
             await self.send_player_ui(
@@ -142,10 +148,13 @@ class playerinterface(Extension):
                 player_data['health'],
                 player_data['mana'],
                 player_data['stamina'],
-                player_data['current_location']
+                player_data['current_location'],
+                player_data['gold_balance']  # Access gold_balance from player_data
             )
         else:
             await ctx.send("Your player data could not be found.", ephemeral=True)
+
+
 
     # Button Handlers
 
