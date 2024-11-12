@@ -289,8 +289,23 @@ class playerinterface(Extension):
 
         await ctx.send(f"You have traveled to {new_location_name}.", ephemeral=True)
 
-        player_data = await self.bot.db.fetch_player_details(player_id)
-        await self.send_player_ui(ctx, player_data['name'], player_data['health'], player_data['mana'], player_data['stamina'], player_data['current_location'])
+        # Fetch player details along with the gold balance in a single query
+        player_data = await self.bot.db.fetchrow("""
+            SELECT pd.health, pd.mana, pd.stamina, l.name AS location_name, pd.current_location, pd.gold_balance
+            FROM player_data pd
+            JOIN locations l ON l.locationid = pd.current_location
+            WHERE pd.playerid = $1
+        """, player_id)
+
+        await self.send_player_ui(
+            ctx,
+            player_data['location_name'],
+            player_data['health'],
+            player_data['mana'],
+            player_data['stamina'],
+            player_data['current_location'],
+            player_data['gold_balance']  # Pass the gold balance here
+        )
 
 # Setup function to load this as an extension
 def setup(bot):
