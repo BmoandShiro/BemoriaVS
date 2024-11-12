@@ -9,6 +9,12 @@ class playerinterface(Extension):
         self.bot = bot
 
     async def send_player_ui(self, ctx, location_name, health, mana, stamina, current_location_id):
+        db = self.bot.db
+        player_id = await db.get_or_create_player(ctx.author.id)
+        
+        current_inventory_count = await db.get_current_inventory_count(player_id)
+        max_inventory_capacity = await db.get_inventory_capacity(player_id)
+
         embed = Embed(
             title="Player Information",
             description=f"You are currently in {location_name}",
@@ -17,6 +23,7 @@ class playerinterface(Extension):
         embed.add_field(name="Health", value=str(health), inline=True)
         embed.add_field(name="Mana", value=str(mana), inline=True)
         embed.add_field(name="Stamina", value=str(stamina), inline=True)
+        embed.add_field(name="Inventory Capacity", value=f"{current_inventory_count}/{max_inventory_capacity}", inline=True)
 
         user_id = ctx.author.id  # This is the Discord User ID
 

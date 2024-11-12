@@ -1,6 +1,7 @@
 import interactions
 from interactions import SlashContext, Extension, component_callback, ComponentContext
-
+from PostgreSQLlogic import Database
+import logging
 import random
 import time
 
@@ -153,35 +154,48 @@ class FishingModule:
         try:
             # Get the player ID
             player_id = await self.db.get_or_create_player(ctx.author.id)
-        
-            # Fetch the equipped fishing tool's specific rod type from items table
-            tool = await self.db.fetchrow("""
-                SELECT it.rodtype FROM inventory inv
-                JOIN items it ON inv.itemid = it.itemid
-                WHERE inv.playerid = $1 AND inv.isequipped = true AND it.type = 'Tool'
-            """, player_id)
-        
-            if not tool or not tool['rodtype']:
+
+            # Fetch the equipped fishing tool's specific rod type from the inventory
+            tool_type = await self.get_equipped_fishing_tool(player_id)
+
+            if not tool_type:
                 await ctx.send("You need to equip a fishing tool with a specified rod type to fish.")
                 return
-        
-            tool_type = tool['rodtype']
-        
-            # Attempt to catch a fish with the specified location and tool type
-            result = await self.attempt_catch_fish(player_id, location, tool_type)  # Pass player_id
 
-            if isinstance(result, str):  # Error message if no fish are available
-                await ctx.send(result)
+            # Check if there are available inventory slots before catching fish
+            has_slots = await self.db.can_add_to_inventory(player_id)
+            if not has_slots:
+                await ctx.send("You don't have enough space in your inventory to catch more fish.")
+                return
+
+            # Attempt to catch a fish with the specified location and tool type
+            result = await self.attempt_catch_fish(player_id, location, tool_type)
+
+            # Handle fishing result
+            if isinstance(result, str):
+                await ctx.send(result)  # This is an error message from attempt_catch_fish
             else:
                 await ctx.send(
-                    f"You caught a {result['rarity'].capitalize()} {result['name']}! "
+                    f"**You caught a {result['rarity'].capitalize()} {result['name']}!** "
                     f"Length: {result['length']} cm, Weight: {result['weight']} kg. "
                     f"XP Gained: {result['xp_gained']}."
                 )
 
         except Exception as e:
-            print(f"Error during fishing interaction: {e}")
-            await ctx.send(f"An error occurred: {e}")
+            logging.error(f"Error during fishing interaction: {e}", exc_info=True)
+            await ctx.send("An error occurred during the fishing interaction. Please try again later.")
+
+    async def get_equipped_fishing_tool(self, player_id):
+        """
+        Get the equipped fishing tool and return its rod type.
+        """
+        tool = await self.db.fetchrow("""
+            SELECT it.rodtype FROM inventory inv
+            JOIN items it ON inv.itemid = it.itemid
+            WHERE inv.playerid = $1 AND inv.isequipped = true AND it.type = 'Tool'
+        """, player_id)
+
+        return tool['rodtype'] if tool else None
             
 
     

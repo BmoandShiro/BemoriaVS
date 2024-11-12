@@ -189,6 +189,8 @@ class Database:
                 ON CONFLICT (playerid) DO NOTHING;
             """, player_id)
 
+
+            #UTILITY FUNCTIONS
             
     async def fetch(self, query, *args):
         """Fetch multiple rows from the database."""
@@ -205,6 +207,16 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute(query, *args)
             
+    
+    
+    async def fetchval(self, query, *args):
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval(query, *args)
+
+
+
+
+
     async def get_inventory_capacity(self, player_id):
         """Fetch the maximum inventory slots a player has."""
         row = await self.fetchrow(
@@ -213,6 +225,21 @@ class Database:
         )
         return row["inventory_slots"] if row else None
     
+    
+
+    async def get_current_inventory_count(self, player_id):
+        """Get the current number of different items in the player's inventory."""
+        return await self.fetchval(
+            "SELECT COUNT(*) FROM inventory WHERE playerid = $1;",
+            player_id
+        )
+
+    async def can_add_to_inventory(self, player_id, items_to_add=1):
+        """Check if the player can add new items to their inventory without exceeding capacity."""
+        current_capacity = await self.get_inventory_capacity(player_id)
+        current_item_count = await self.get_current_inventory_count(player_id)
+        return current_item_count + items_to_add <= current_capacity
+    
     async def increase_inventory_capacity(self, player_id, additional_slots=5):
         """Increase the player's inventory slots by a specified number."""
         await self.execute(
@@ -220,12 +247,6 @@ class Database:
             player_id, additional_slots
         )
         return f"Inventory capacity increased by {additional_slots} slots."
-    
-    async def fetchval(self, query, *args):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchval(query, *args)
-
-
 
 
     # ... additional methods for other database interactions
