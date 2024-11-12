@@ -4,6 +4,7 @@ from PostgreSQLlogic import Database
 import logging
 import random
 import time
+import asyncio
 
 class FishingModule:
     def __init__(self, bot):
@@ -81,20 +82,29 @@ class FishingModule:
     def roll_for_fish(self, fish_list, rarity):
         # Filter fish by the rarity tier
         filtered_fish = [fish for fish in fish_list if fish["qualitytier"].lower() == rarity]
-    
+
         if not filtered_fish:
             return None
 
         # Calculate relative weights with drop_modifier for fine-tuning
         total_weight = sum(float(fish["catch_probability"]) * float(fish["drop_modifier"]) for fish in filtered_fish)
-        roll = random.uniform(0, total_weight)
     
+        # Normalize weights so that they sum to 1
+        normalized_weights = [
+            (fish, (float(fish["catch_probability"]) * float(fish["drop_modifier"])) / total_weight)
+            for fish in filtered_fish
+        ]
+
+        roll = random.uniform(0, 1)
         current_weight = 0
-        for fish in filtered_fish:
-            current_weight += float(fish["catch_probability"]) * float(fish["drop_modifier"])
+
+        # Roll based on normalized weights
+        for fish, weight in normalized_weights:
+            current_weight += weight
             if roll <= current_weight:
                 print(f"Selected fish: {fish['name']} with rarity: {rarity}")  # Debug output
                 return fish
+
 
 
     async def attempt_catch_fish(self, player_id, location, tool_type):
@@ -104,7 +114,8 @@ class FishingModule:
 
         xp_level = await self.get_player_xp_level(player_id)
         catch_time = max(1, 10 - xp_level)
-        time.sleep(catch_time)
+        await asyncio.sleep(catch_time)
+
 
         rarity = self.roll_for_rarity(xp_level)
         caught_fish = self.roll_for_fish(fish_list, rarity)
