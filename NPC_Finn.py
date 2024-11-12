@@ -1,5 +1,7 @@
 from interactions import Extension, SlashContext, component_callback, ComponentContext, Button, ButtonStyle
 from NPC_Base import NPCBase  # Assuming you have a base NPC class for shared NPC functionality
+import logging
+import re
 
 class Finn(NPCBase, Extension):
     def __init__(self, bot):
@@ -52,8 +54,16 @@ class Finn(NPCBase, Extension):
         )
         
      #Add a component callback for the 'talk_to_finn' button
-    @component_callback("talk_to_finn")
+    @component_callback(re.compile(r"^talk_to_finn_\d+$"))
     async def talk_to_finn_button_handler(self, ctx: ComponentContext):
+        logging.info(f"Received custom_id: {ctx.custom_id}")
+
+        original_user_id = int(ctx.custom_id.split("_")[3])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        # Assuming you want to call the interact function if the user is authorized
         player_id = await self.bot.db.get_or_create_player(ctx.author.id)
         await self.interact(ctx, player_id)
 
