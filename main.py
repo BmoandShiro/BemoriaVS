@@ -16,7 +16,7 @@ from NPC_Manager import NPCManager
 from inventory_systems import setup as inventory_setup
 #from Fishing import setup as fishing_setup
 from Fishing import FishingModule
-
+from Shop_Manager import ShopManager
 
 logging.basicConfig(level=logging.INFO)
 
@@ -54,7 +54,8 @@ bot.travel_system = travel_system
 bot.fishing_module = FishingModule(bot)
 #fishing_setup(bot)
 
-
+shop_manager = ShopManager()
+bot.shop_manager = shop_manager
 
 
 async def patched_send(ctx, *args, **kwargs):

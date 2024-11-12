@@ -3,6 +3,9 @@ from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_co
 from functools import partial
 import logging
 import math
+import json
+
+
 
 class playerinterface(Extension):
     def __init__(self, bot):
@@ -39,7 +42,7 @@ class playerinterface(Extension):
         ]
 
         # Get dynamic buttons based on the current location
-        dynamic_buttons = await self.get_location_based_buttons(current_location_id)
+        dynamic_buttons = await self.get_location_based_buttons(current_location_id, player_id)
 
         # Update dynamic buttons to include user ID in their custom_id as well
         dynamic_buttons = [
@@ -54,19 +57,32 @@ class playerinterface(Extension):
         # Send the embed with the buttons arranged in rows
         await ctx.send(embeds=[embed], components=button_rows, ephemeral=False)
 
-    async def get_location_based_buttons(self, location_id):
-        """
-        Fetch location-based commands from the database and create buttons for each command.
-        """
+    async def get_location_based_buttons(self, location_id, player_id):
         db = self.bot.db
         commands = await db.fetch("""
-            SELECT command_name, button_label, custom_id
+            SELECT command_name, button_label, custom_id, condition
             FROM location_commands
             WHERE locationid = $1
         """, location_id)
 
         buttons = []
         for command in commands:
+            # Check if the command has a condition and evaluate it
+            if command['condition']:
+                condition = json.loads(command['condition'])
+                quest_id = condition.get("quest_id")
+                required_status = condition.get("status")
+
+                # Fetch player's quest status
+                quest_status = await db.fetchval("""
+                    SELECT status FROM player_quests WHERE player_id = $1 AND quest_id = $2
+                """, player_id, quest_id)
+
+                if quest_status != required_status:
+                    # If the quest condition is not met, skip adding this button
+                    continue
+
+            # Add the button if the condition is either met or does not exist
             buttons.append(Button(style=ButtonStyle.PRIMARY, label=command['button_label'], custom_id=command['custom_id']))
         return buttons
 
