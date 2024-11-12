@@ -5,6 +5,7 @@ import logging
 import math
 
 
+
 class playerinterface(Extension):
     def __init__(self, bot):
         self.bot = bot
@@ -18,12 +19,14 @@ class playerinterface(Extension):
         embed.add_field(name="Health", value=str(health), inline=True)
         embed.add_field(name="Mana", value=str(mana), inline=True)
         embed.add_field(name="Stamina", value=str(stamina), inline=True)
+        
+        user_id = ctx.author.id  # This is the Discord User ID
 
         # Static buttons (including the new "Travel To" button)
         static_buttons = [
             Button(style=ButtonStyle.PRIMARY, label="Travel", custom_id="travel"),
             Button(style=ButtonStyle.PRIMARY, label="Skills", custom_id="skills"),
-            Button(style=ButtonStyle.PRIMARY, label="View Stats", custom_id="view_stats"),
+            Button(style=ButtonStyle.PRIMARY, label="View Stats", custom_id=f"view_stats_{user_id}"),
             Button(style=ButtonStyle.PRIMARY, label="Inventory", custom_id="inventory"),
             Button(style=ButtonStyle.PRIMARY, label="Quests", custom_id="quests"),
             Button(style=ButtonStyle.PRIMARY, label="Travel To", custom_id="travel_to")  # New button added here
@@ -132,10 +135,18 @@ class playerinterface(Extension):
         else:
             await ctx.send("Your player data could not be found.", ephemeral=True)
 
-    @component_callback("view_stats")
+    @component_callback(re.compile(r"^view_stats_\d+$"))
     async def view_stats_button_handler(self, ctx: ComponentContext):
-        db = self.bot.db
-        player_id = await db.get_or_create_player(ctx.author.id)
+        # Extract the user ID from the custom_id
+        original_user_id = int(ctx.custom_id.split("_")[2])
+    
+        # Verify the user who is interacting is the original user
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        # Fetch player data and proceed if authorized
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
         await self.send_player_stats(ctx, player_id)
 
     @component_callback("skills")
