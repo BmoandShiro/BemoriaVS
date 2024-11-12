@@ -20,7 +20,7 @@ class Database:
 
     async def create_pool(self):
         if not self.pool:  # Only create the pool if it doesn't exist
-            self.pool = await asyncpg.create_pool(self.dsn, max_size=30)  # Limit max connections
+            self.pool = await asyncpg.create_pool(self.dsn, max_size=99)  # Limit max connections
 
     async def fetch_races(self):
         if self.pool is None:
