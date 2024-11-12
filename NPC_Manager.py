@@ -2,7 +2,7 @@
 
 from interactions import Extension, SlashContext
 from NPC_Finn import Finn  # Import NPC classes
-# Import other NPC modules as needed
+from NPC_Dave import Dave  # Import Dave
 
 class NPCManager(Extension):
     def __init__(self, bot):
@@ -10,8 +10,8 @@ class NPCManager(Extension):
         self.db = bot.db
         # Register NPCs by name or identifier
         self.npcs = {
-            "finn": Finn(self.bot)  # Instantiate Finn
-            # Add other NPCs here, e.g., "merchant": Merchant(self.bot)
+            "finn": Finn(self.bot),  # Instantiate Finn
+            "dave": Dave(self.bot)  # Instantiate Dave
         }
 
     async def interact_with_npc(self, ctx: SlashContext, npc_name: str):
@@ -38,4 +38,3 @@ class NPCManager(Extension):
 # Setup function for the bot to load NPCManager as an extension
 def setup(bot):
     NPCManager(bot)  # This registers the NPCManager class as an extension
-
