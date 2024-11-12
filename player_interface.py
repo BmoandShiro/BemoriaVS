@@ -307,6 +307,28 @@ class playerinterface(Extension):
             player_data['gold_balance']  # Pass the gold balance here
         )
 
+
+    async def send_quest_details(self, ctx, quest_id):
+        db = self.bot.db
+        quest = await db.fetchrow("SELECT * FROM quests WHERE quest_id = $1", quest_id)
+
+        if quest:
+            embed = Embed(
+                title=f"Quest: {quest['name']}",
+                description=quest['description'],
+                color=0x00FF00
+            )
+
+            # Add XP Reward details
+            fishing_xp_reward = quest['fishing_xp_reward']
+            if fishing_xp_reward > 0:
+                embed.add_field(name="Fishing XP Reward", value=f"{fishing_xp_reward} XP", inline=False)
+
+            # Add other rewards if applicable (e.g., items, general XP)
+            await ctx.send(embeds=[embed])
+        else:
+            await ctx.send("Quest not found.", ephemeral=True)
+
 # Setup function to load this as an extension
 def setup(bot):
     playerinterface(bot)
