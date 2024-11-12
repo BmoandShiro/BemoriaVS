@@ -144,8 +144,17 @@ class Finn(NPCBase, Extension):
             VALUES ($1, 2, 'in_progress', '{"legendary_fish_collected": 0}')
         """, player_id)
 
+        # Fetch quest details for the indicator
+        quest_details = await self.db.fetchrow("""
+            SELECT name, description FROM quests WHERE quest_id = $1
+        """, 2)
+
+        # Trigger the quest indicator
+        await send_quest_indicator(ctx, quest_details['name'], quest_details['description'])
+
         # Send the player the dialogue offering Dave's quest
         await ctx.send("Finn says: 'I've heard of an old man in town named Dave. He used to be a great angler like you but has recently stopped fishing. He devoted his life to the catching legendary fish. Maybe you will see him around town.'")
+
 
    
     
