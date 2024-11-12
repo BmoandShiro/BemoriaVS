@@ -222,7 +222,29 @@ class playerinterface(Extension):
             await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
             return
 
-        await ctx.send("Quest functionality coming soon!", ephemeral=True)
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+
+        # Fetch the active quests from player_quests table
+        active_quests = await self.bot.db.fetch("""
+            SELECT q.name, q.description
+            FROM player_quests pq
+            JOIN quests q ON pq.quest_id = q.quest_id
+            WHERE pq.player_id = $1 AND pq.status = 'in_progress'
+        """, player_id)
+
+        # Create an embed to display the quests
+        if active_quests:
+            embed = Embed(
+                title="Active Quests",
+                description="Here are your current active quests:",
+                color=0x00FF00
+            )
+            for quest in active_quests:
+                embed.add_field(name=quest['name'], value=quest['description'], inline=False)
+
+            await ctx.send(embeds=[embed], ephemeral=True)
+        else:
+            await ctx.send("You currently have no active quests.", ephemeral=True)
 
     @component_callback(re.compile(r"^travel_to_\d+$"))
     async def travel_to_button_handler(self, ctx: ComponentContext):
