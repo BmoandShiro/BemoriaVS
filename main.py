@@ -40,6 +40,8 @@ logging.info("Loading extensions...")
 player_interface_setup(bot)  # Pass the database instance to the setup function of the player_interface 
 cc_setup(bot)  # Pass both the bot and db instances to the setup function
 #ts_setup(bot) #had to take this out for now to make it work idk why i need to learn this part better still
+# Load extensions (including Listener)
+bot.load_extension("Listener")  # Load the listener extension
 
 # Create and attach InventorySystem to the bot
 inventory_system = InventorySystem(bot)
