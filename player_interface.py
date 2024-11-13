@@ -59,32 +59,40 @@ class playerinterface(Extension):
 
     async def get_location_based_buttons(self, location_id, player_id):
         db = self.bot.db
+        # Fetch relevant commands based on location_id
         commands = await db.fetch("""
-            SELECT command_name, button_label, custom_id, condition
+            SELECT command_name, button_label, custom_id, condition, required_quest_id, required_quest_status, required_item_id
             FROM location_commands
             WHERE locationid = $1
         """, location_id)
 
         buttons = []
         for command in commands:
-            # Check if the command has a condition and evaluate it
-            if command['condition']:
-                condition = json.loads(command['condition'])
-                quest_id = condition.get("quest_id")
-                required_status = condition.get("status")
-
-                # Fetch player's quest status
+            # Check if the command has quest requirements and evaluate them
+            if command['required_quest_id'] is not None:
                 quest_status = await db.fetchval("""
                     SELECT status FROM player_quests WHERE player_id = $1 AND quest_id = $2
-                """, player_id, quest_id)
+                """, player_id, command['required_quest_id'])
 
-                if quest_status != required_status:
-                    # If the quest condition is not met, skip adding this button
+                if quest_status != command['required_quest_status']:
+                    # Skip this button if quest condition is not met
                     continue
 
-            # Add the button if the condition is either met or does not exist
+            # Check if the command has item requirements and evaluate them
+            if command['required_item_id'] is not None:
+                has_required_item = await db.fetchval("""
+                    SELECT COUNT(*) FROM inventory WHERE playerid = $1 AND itemid = $2
+                """, player_id, command['required_item_id'])
+
+                if has_required_item == 0:
+                    # Skip this button if the required item is not in the player's inventory
+                    continue
+
+            # Add the button if all conditions are met or if no conditions exist
             buttons.append(Button(style=ButtonStyle.PRIMARY, label=command['button_label'], custom_id=command['custom_id']))
+
         return buttons
+
 
     async def send_player_stats(self, ctx, player_id):
         db = self.bot.db
