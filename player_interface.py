@@ -4,12 +4,15 @@ from functools import partial
 import logging
 import math
 import json
-
+from inventory_systems import InventorySystem  # Import the InventorySystem
+from interactions import ButtonStyle, Embed, Button, Extension, slash_command, ComponentContext
+import re
 
 
 class playerinterface(Extension):
     def __init__(self, bot):
         self.bot = bot
+        
 
     async def send_player_ui(self, ctx, location_name, health, mana, stamina, current_location_id, gold_balance):
         db = self.bot.db
@@ -259,6 +262,54 @@ class playerinterface(Extension):
             await inventory_system.display_inventory(ctx, player_id)
         else:
             await ctx.send("Inventory system is not available.", ephemeral=True)
+            
+
+    @component_callback(re.compile(r"^bank_\d+$"))
+    async def bank_button_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[1])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+
+        # Fetch items currently in the bank
+        bank_items = await self.bot.db.fetch("""
+            SELECT inv.inventoryid, inv.quantity, inv.isequipped,
+                   COALESCE(i.name, cf.fish_name) AS item_name, cf.length, cf.weight, cf.rarity
+            FROM inventory inv
+            LEFT JOIN items i ON inv.itemid = i.itemid
+            LEFT JOIN caught_fish cf ON inv.caught_fish_id = cf.id
+            WHERE inv.playerid = $1 AND inv.in_bank = TRUE
+        """, player_id)
+
+        if not bank_items:
+            return await ctx.send("Bank is empty.", ephemeral=True)
+
+        # Build detailed bank inventory display
+        bank_view = ""
+        for item in bank_items:
+            if item['item_name']:
+                if item['length'] and item['weight']:
+                    bank_view += f"{item['item_name']} (Rarity: {item['rarity']}, Length: {item['length']} cm, Weight: {item['weight']} kg)\n"
+                else:
+                    bank_view += f"{item['item_name']} (x{item['quantity']})"
+                if item['isequipped']:
+                    bank_view += " - Equipped"
+                bank_view += "\n"
+
+        # Adding equip, unequip, drop, and transfer buttons
+        '''equip_button = Button(style=ButtonStyle.SUCCESS, label="Equip Item", custom_id=f"equip_item_{player_id}")
+        unequip_button = Button(style=ButtonStyle.DANGER, label="Unequip Item", custom_id=f"unequip_item_{player_id}")
+        drop_button = Button(style=ButtonStyle.DANGER, label="Drop Item", custom_id=f"drop_item_{player_id}")
+        transfer_to_inventory_buttons = Button(style=ButtonStyle.SECONDARY, label="Transfer to Inventory", custom_id=f"transfer_to_inventory_{player_id}")
+        transfer_to_bank_buttons = Button(style=ButtonStyle.SECONDARY, label="Transfer to Bank", custom_id=f"transfer_to_bank_{ctx.author.id}")
+        
+        components = [[equip_button, unequip_button, drop_button, transfer_to_inventory_buttons, transfer_to_bank_buttons]]'''
+
+        # Send the bank inventory content and appropriate buttons
+        await ctx.send(content=bank_view, ephemeral=True)
+
 
     @component_callback(re.compile(r"^quests_\d+$"))
     async def quests_button_handler(self, ctx: ComponentContext):
@@ -398,6 +449,39 @@ class playerinterface(Extension):
             await ctx.send(embeds=[embed])
         else:
             await ctx.send("Quest not found.", ephemeral=True)
+            
+    '''@component_callback(re.compile(r"^transfer_to_inventory_\d+$"))
+    async def transfer_to_inventory_handler(self, ctx: ComponentContext):
+        # Extract the user ID from the custom ID
+        original_user_id = int(ctx.custom_id.split("_")[-1])
+        # Check if the button interaction is from the same user
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        # Delegate the action to the InventorySystem module
+        if self.inventory_system:
+            await ctx.defer(ephemeral=True)  # Acknowledge the interaction to prevent expiration
+            await self.inventory_system.transfer_to_inventory_handler(ctx)
+        else:
+            await ctx.send("Inventory system is not available.", ephemeral=True)
+
+    @component_callback(re.compile(r"^transfer_to_bank_\d+$"))
+    async def transfer_to_bank_handler(self, ctx: ComponentContext):
+        # Extract the user ID from the custom ID
+        original_user_id = int(ctx.custom_id.split("_")[-1])
+        # Check if the button interaction is from the same user
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        # Delegate the action to the InventorySystem module
+        if self.inventory_system:
+            await ctx.defer(ephemeral=True)  # Acknowledge the interaction to prevent expiration
+            await self.inventory_system.transfer_to_bank_handler(ctx)
+        else:
+            await ctx.send("Inventory system is not available.", ephemeral=True)'''
+    
 
 # Setup function to load this as an extension
 def setup(bot):

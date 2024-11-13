@@ -61,33 +61,38 @@ class InventorySystem(Extension):
         await ctx.send(content=inventory_view, components=components, ephemeral=True)
     
 
-    async def display_bank(self, ctx, player_id):
-            bank_items = await self.db.fetch("""
-                SELECT inv.inventoryid, inv.quantity, COALESCE(i.name, cf.fish_name) AS item_name, cf.length, cf.weight, cf.rarity
-                FROM inventory inv
-                LEFT JOIN items i ON inv.itemid = i.itemid
-                LEFT JOIN caught_fish cf ON inv.caught_fish_id = cf.id
-                WHERE inv.playerid = $1 AND inv.in_bank = TRUE
-            """, player_id)
+    async def display_bank(self, ctx, player_id, message=None):
+        bank_items = await self.db.fetch("""
+            SELECT inv.inventoryid, inv.quantity, COALESCE(i.name, cf.fish_name) AS item_name, cf.length, cf.weight, cf.rarity
+            FROM inventory inv
+            LEFT JOIN items i ON inv.itemid = i.itemid
+            LEFT JOIN caught_fish cf ON inv.caught_fish_id = cf.id
+            WHERE inv.playerid = $1 AND inv.in_bank = TRUE
+        """, player_id)
 
-            if not bank_items:
-                return await ctx.send("Bank is empty.", ephemeral=True)
+        if not bank_items:
+            return await ctx.send("Bank is empty.", ephemeral=True)
 
-            # Build detailed bank inventory display
-            bank_view = ""
-            for item in bank_items:
-                if item['item_name']:
-                    if item['length'] and item['weight']:
-                        bank_view += f"{item['item_name']} (Rarity: {item['rarity']}, Length: {item['length']} cm, Weight: {item['weight']} kg)\n"
-                    else:
-                        bank_view += f"{item['item_name']} (x{item['quantity']})"
-                    bank_view += "\n"
+        # Build detailed bank inventory display
+        bank_view = ""
+        for item in bank_items:
+            if item['item_name']:
+                if item['length'] and item['weight']:
+                    bank_view += f"{item['item_name']} (Rarity: {item['rarity']}, Length: {item['length']} cm, Weight: {item['weight']} kg)\n"
+                else:
+                    bank_view += f"{item['item_name']} (x{item['quantity']})"
+                bank_view += "\n"
 
-            # Adding transfer button to bring items back to inventory
-            transfer_to_inventory_button = Button(style=ButtonStyle.SECONDARY, label="Transfer to Inventory", custom_id="transfer_to_inventory")
+        # Adding transfer buttons
+        transfer_to_inventory_button = Button(style=ButtonStyle.SECONDARY, label="Transfer to Inventory", custom_id=f"transfer_to_inventory_{player_id}")
+        transfer_to_bank_button = Button(style=ButtonStyle.SECONDARY, label="Transfer to Bank", custom_id=f"transfer_to_bank_{player_id}")
 
-            # Send the bank inventory content and transfer button
-            await ctx.send(content=bank_view, components=[[transfer_to_inventory_button]], ephemeral=True)
+        components = [[transfer_to_inventory_button, transfer_to_bank_button]]
+
+        if message:
+            await message.edit(content=bank_view, components=components)
+        else:
+            await ctx.send(content=bank_view, components=components, ephemeral=True)
         
 
         
@@ -164,45 +169,7 @@ class InventorySystem(Extension):
 
         await ctx.send("Item transferred to inventory.", ephemeral=True)
         
-    @component_callback("bank_\d+")
-    async def bank_button_handler(self, ctx: ComponentContext):
-        player_id = await self.db.get_or_create_player(ctx.author.id)
-
-        # Fetch items currently in the bank
-        bank_items = await self.db.fetch("""
-            SELECT inv.inventoryid, inv.quantity, inv.isequipped,
-                   COALESCE(i.name, cf.fish_name) AS item_name, cf.length, cf.weight, cf.rarity
-            FROM inventory inv
-            LEFT JOIN items i ON inv.itemid = i.itemid
-            LEFT JOIN caught_fish cf ON inv.caught_fish_id = cf.id
-            WHERE inv.playerid = $1 AND inv.in_bank = TRUE
-        """, player_id)
-
-        if not bank_items:
-            return await ctx.send("Bank is empty.", ephemeral=True)
-
-        # Build detailed bank inventory display
-        bank_view = ""
-        for item in bank_items:
-            if item['item_name']:
-                if item['length'] and item['weight']:
-                    bank_view += f"{item['item_name']} (Rarity: {item['rarity']}, Length: {item['length']} cm, Weight: {item['weight']} kg)\n"
-                else:
-                    bank_view += f"{item['item_name']} (x{item['quantity']})"
-                if item['isequipped']:
-                    bank_view += " - Equipped"
-                bank_view += "\n"
-
-        # Adding equip, unequip, drop, and transfer buttons
-        equip_button = Button(style=ButtonStyle.SUCCESS, label="Equip Item", custom_id="equip_item")
-        unequip_button = Button(style=ButtonStyle.DANGER, label="Unequip Item", custom_id="unequip_item")
-        drop_button = Button(style=ButtonStyle.DANGER, label="Drop Item", custom_id="drop_item")
-        transfer_to_inventory_button = Button(style=ButtonStyle.SECONDARY, label="Transfer to Inventory", custom_id="transfer_to_inventory")
-
-        components = [[equip_button, unequip_button, drop_button, transfer_to_inventory_button]]
-
-        # Send the bank inventory content and appropriate buttons
-        await ctx.send(content=bank_view, components=components, ephemeral=True)
+    
 
     @component_callback("equip_item")
     async def equip_item_handler(self, ctx: ComponentContext):
@@ -304,3 +271,4 @@ class InventorySystem(Extension):
 # Setup function to load this as an extension
 def setup(bot):
     InventorySystem(bot)
+    
