@@ -3,6 +3,7 @@ from NPC_Base import NPCBase  # Assuming you have a base NPC class for shared NP
 import logging
 import re
 from Utility import send_quest_indicator
+from inventory_systems import InventorySystem
 
 class Dave(NPCBase, Extension):
     def __init__(self, bot):
@@ -42,29 +43,50 @@ class Dave(NPCBase, Extension):
     async def complete_quest(self, ctx, player_id):
         logging.info(f"Completing Dave's quest for player_id: {player_id}")
 
-        # Delete one legendary fish from inventory
-        await self.db.execute("""
-            DELETE FROM inventory
-            WHERE playerid = $1 AND itemid IN (
-                SELECT inv.itemid
-                FROM inventory inv
-                JOIN caught_fish cf ON inv.caught_fish_id = cf.id
-                WHERE inv.playerid = $1 AND cf.rarity = 'legendary'
-                LIMIT 1
-            )
+        # Fetch the inventory item ID for the legendary fish
+        legendary_fish = await self.db.fetchrow("""
+            SELECT inventoryid, caught_fish_id 
+            FROM inventory inv
+            JOIN caught_fish cf ON inv.caught_fish_id = cf.id
+            WHERE inv.playerid = $1 AND cf.rarity = 'legendary'
+            LIMIT 1
         """, player_id)
 
+        # If legendary fish is found, use the drop logic to remove it
+        if legendary_fish:
+            await self._drop_item(player_id, legendary_fish['inventoryid'], legendary_fish['caught_fish_id'])
+        else:
+            await ctx.send("Error: Legendary fish not found in inventory.")
+            return
+
+        # Update player quest status to 'completed'
         await self.db.execute("""
             UPDATE player_quests SET status = 'completed'
             WHERE player_id = $1 AND quest_id = 2
         """, player_id)
 
+        # Inform the player of quest completion
         await ctx.send(f"Dave says: 'You've inspired me with that legendary fish! I'll reopen my shop as a thank you.'")
 
+        # Send quest indicator to the player
         quest_details = await self.db.fetchrow("""
             SELECT name, description FROM quests WHERE quest_id = $1
         """, 2)
         await send_quest_indicator(ctx, quest_details['name'], quest_details['description'])
+
+
+    async def _drop_item(self, player_id, inventory_id, caught_fish_id=None):
+        # Logic for dropping an item, similar to select_drop_item_handler
+        if caught_fish_id:
+            # If it's a fish, remove it from the inventory first
+            await self.db.execute("DELETE FROM inventory WHERE inventoryid = $1 AND playerid = $2", inventory_id, player_id)
+            # Then remove it from the caught_fish table
+            await self.db.execute("DELETE FROM caught_fish WHERE id = $1", caught_fish_id)
+        else:
+            # If it's not a fish, simply remove it from the inventory table
+            await self.db.execute("DELETE FROM inventory WHERE inventoryid = $1 AND playerid = $2", inventory_id, player_id)
+
+
 
 
 
