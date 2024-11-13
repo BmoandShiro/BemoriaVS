@@ -89,53 +89,113 @@ class Finn(NPCBase, Extension):
     # Add a component callback for the 'talk_to_finn' button
     @component_callback(re.compile(r"^talk_to_finn_\d+$"))
     async def talk_to_finn_button_handler(self, ctx: ComponentContext):
-        logging.info(f"Received custom_id: {ctx.custom_id}")
+        # Log the received custom_id to verify its structure
+        logging.info(f"[INFO] Received custom_id: {ctx.custom_id}")
 
-        original_user_id = int(ctx.custom_id.split("_")[3])
-        if ctx.author.id != original_user_id:
-            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+        # Extract and log the split custom_id parts
+        custom_id_parts = ctx.custom_id.split("_")
+        logging.info(f"[INFO] Custom ID parts: {custom_id_parts}")
+
+        # Ensure we have the expected number of parts
+        if len(custom_id_parts) != 4:
+            await ctx.send("Error: Unexpected custom ID format.", ephemeral=True)
+            logging.error(f"[ERROR] Unexpected custom ID format: {ctx.custom_id}")
             return
 
-        # Get or create player
-        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        # Attempt to parse the user ID part (use the correct index, which is 3)
+        try:
+            original_user_id = int(custom_id_parts[3])
+        except ValueError as e:
+            await ctx.send("Error: Unable to extract user ID from custom ID.", ephemeral=True)
+            logging.error(f"[ERROR] Failed to parse user ID from custom_id: {ctx.custom_id}. Error: {e}")
+            return
 
-        # Check if the player has completed the Finn quest
+        # Log the user IDs for verification
+        logging.info(f"[INFO] Original user ID: {original_user_id}, Interaction by user ID: {ctx.author.id}")
+
+        # Verify if the user interacting is the same as the original user
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            logging.info(f"[INFO] Authorization failed for user {ctx.author.id}.")
+            return
+
+        # Proceed with player interaction
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        logging.info(f"[INFO] Player ID {player_id} fetched or created.")
+
+        # Remaining logic (quest status check, etc.)
         finn_quest_status = await self.db.fetchval("""
             SELECT status FROM player_quests
-            WHERE player_id = $1 AND quest_id = 1  -- Assuming quest_id 1 is Finn's quest
+            WHERE player_id = $1 AND quest_id = 1
         """, player_id)
+        logging.info(f"[INFO] Finn quest status for player {player_id}: {finn_quest_status}")
 
         if finn_quest_status == 'completed':
-            # Check if Dave's quest has already been given to the player
+            # Handling for Dave's quest offering
             dave_quest_status = await self.db.fetchval("""
                 SELECT status FROM player_quests
-                WHERE player_id = $1 AND quest_id = 2  -- Assuming quest_id 2 is Dave's quest
+                WHERE player_id = $1 AND quest_id = 2
             """, player_id)
+            logging.info(f"[INFO] Dave quest status for player {player_id}: {dave_quest_status}")
 
             if not dave_quest_status:
-                # Offer Dave's Fishery quest if it hasn't been given yet
                 await self.offer_dave_quest(ctx, player_id)
             else:
-                # If Dave's quest has already been given, Finn has nothing new to offer
                 await ctx.send("Finn says: 'Sorry, I don't have anything else for you right now.'")
             return
 
         elif finn_quest_status == 'in_progress':
-            # Check if the player has enough rare fish to complete the quest
+            # Handle the quest in progress state
             has_rare_fish = await self.check_rare_fish(player_id)
+            logging.info(f"[INFO] Player {player_id} has enough rare fish: {has_rare_fish}")
 
             if has_rare_fish:
-                # Update quest to complete and provide a reward
-                await self.complete_quest(player_id, 1)
+                # Complete the quest and remove fish
+                await self.db.execute("""
+                    UPDATE player_quests
+                    SET status = 'completed'
+                    WHERE player_id = $1 AND quest_id = 1
+                """, player_id)
+                logging.info(f"[INFO] Player {player_id}'s quest has been marked as complete.")
+
+                rare_fish_items = await self.db.fetch("""
+                    SELECT inventoryid, caught_fish_id
+                    FROM inventory inv
+                    JOIN caught_fish cf ON inv.caught_fish_id = cf.id
+                    WHERE inv.playerid = $1 AND cf.rarity = 'rare'
+                    LIMIT 5
+                """, player_id)
+                logging.info(f"[INFO] Rare fish items found for player {player_id}: {rare_fish_items}")
+
+                if not rare_fish_items:
+                    await ctx.send("Error: No rare fish found in your inventory.")
+                    logging.warning(f"[WARNING] No rare fish found in inventory for player {player_id} after quest completion.")
+                    return
+
+                for item in rare_fish_items:
+                    await self.db.execute("DELETE FROM inventory WHERE inventoryid = $1 AND playerid = $2", item['inventoryid'], player_id)
+                    await self.db.execute("DELETE FROM caught_fish WHERE id = $1", item['caught_fish_id'])
+                    logging.info(f"[INFO] Removed fish with inventoryid {item['inventoryid']} and caught_fish_id {item['caught_fish_id']} for player {player_id}")
+
+                fishing_xp_reward = 50
+                await self.db.execute("""
+                    UPDATE player_skills_xp
+                    SET fishing_xp = fishing_xp + $1
+                    WHERE playerid = $2
+                """, fishing_xp_reward, player_id)
+                logging.info(f"[INFO] Awarded {fishing_xp_reward} fishing XP to player {player_id}")
+
                 await ctx.send("Finn says: 'Thank you for gathering the rare fish! Here is your reward.'")
-                # After completing Finn's quest, offer Dave's quest
                 await self.offer_dave_quest(ctx, player_id)
             else:
                 await ctx.send("Finn says: 'You already have your task. Go get those rare fish!'")
             return
 
-        # Proceed with the default interaction if the player does not have the quest yet
         await self.interact(ctx, player_id)
+        logging.info(f"[INFO] Interact function called for player {player_id}.")
+
+
+
 
     async def offer_dave_quest(self, ctx, player_id):
         # Insert the new quest for Dave into the player_quests table
@@ -176,30 +236,99 @@ class Finn(NPCBase, Extension):
         await ctx.send("Finn says: 'Great! Bring me 5 rare fish, and youll earn my gratitude.'")
 
     async def give_finn_quest(self, ctx, player_id):
-        # Check if the player has completed the objectives
+        logging.info(f"[INFO] Entered give_finn_quest for player_id {player_id}")
+
+        # Step 1: Check if the player has completed the objectives (i.e., has enough rare fish)
         has_rare_fish = await self.check_rare_fish(player_id)
-        if has_rare_fish:
-            # Complete Finn's quest
-            await self.complete_quest(player_id, 1)  # Assuming quest_id 1 is Finn's quest
-        
-            # Update player's quest status to complete and reward XP
+        logging.info(f"[DEBUG] Player {player_id} has enough rare fish: {has_rare_fish}")
+
+        if not has_rare_fish:
+            await ctx.send("Finn says: 'You still need to gather more rare fish.'")
+            logging.info(f"[DEBUG] Player {player_id} does not have enough rare fish, stopping quest.")
+            return
+
+        # Step 2: Update the player's quest status to complete
+        try:
             await self.db.execute("""
                 UPDATE player_quests
                 SET status = 'completed'
                 WHERE player_id = $1 AND quest_id = 1
             """, player_id)
+            logging.info(f"[INFO] Player {player_id}'s quest has been marked as complete.")
+        except Exception as e:
+            logging.error(f"[ERROR] Could not update quest status for player {player_id}: {e}")
+            await ctx.send("Error: Could not complete the quest. Please try again later.")
+            return
 
-            # Award fishing XP for completing Finn's quest
-            fishing_xp_reward = 50  # Assuming 50 XP as the reward for Finn's quest
+        # Step 3: Fetch up to 5 rare fish items for removal
+        try:
+            rare_fish_items = await self.db.fetch("""
+                SELECT inventoryid, caught_fish_id
+                FROM inventory inv
+                JOIN caught_fish cf ON inv.caught_fish_id = cf.id
+                WHERE inv.playerid = $1 AND cf.rarity = 'rare'
+                LIMIT 5
+            """, player_id)
+            logging.info(f"[DEBUG] Rare fish items found for player {player_id}: {rare_fish_items}")
+        except Exception as e:
+            logging.error(f"[ERROR] Could not fetch rare fish for player {player_id}: {e}")
+            await ctx.send("Error: Could not verify rare fish in your inventory. Please try again later.")
+            return
+
+        if not rare_fish_items:
+            await ctx.send("Error: No rare fish found in your inventory.")
+            logging.warning(f"[WARNING] No rare fish found in inventory for player {player_id} after quest completion.")
+            return
+
+        # Step 4: Remove the rare fish from inventory
+        for item in rare_fish_items:
+            logging.info(f"[DEBUG] Attempting to remove fish with inventoryid {item['inventoryid']} and caught_fish_id {item['caught_fish_id']} for player {player_id}")
+            await self._drop_item(player_id, item['inventoryid'], item['caught_fish_id'])
+
+        # Step 5: Award fishing XP for completing Finn's quest
+        fishing_xp_reward = 50  # Assuming 50 XP as the reward for Finn's quest
+        try:
             await self.db.execute("""
                 UPDATE player_skills_xp
                 SET fishing_xp = fishing_xp + $1
                 WHERE playerid = $2
             """, fishing_xp_reward, player_id)
+            logging.info(f"[INFO] Awarded {fishing_xp_reward} fishing XP to player {player_id}")
+        except Exception as e:
+            logging.error(f"[ERROR] Could not award XP to player {player_id}: {e}")
+            await ctx.send("Error: Could not award XP for quest completion. Please try again later.")
 
-            await ctx.send("Finn says: 'Well done! You've brought me enough rare fish. Here's some XP for your trouble.'")
-        else:
-            await ctx.send("Finn says: 'You still need to gather more rare fish.'")
+        # Step 6: Send a message to the player indicating quest completion and reward
+        await ctx.send("Finn says: 'Well done! You've brought me enough rare fish. Here's some XP for your trouble.'")
+
+
+
+
+        async def _drop_item(self, player_id, inventory_id, caught_fish_id=None):
+            # Logging entry into the function
+            logging.info(f"[INFO] Entered _drop_item for player_id {player_id}, inventory_id {inventory_id}, caught_fish_id {caught_fish_id}")
+
+            try:
+                if caught_fish_id:
+                    # If it's a fish, remove it from the inventory first
+                    await self.db.execute("DELETE FROM inventory WHERE inventoryid = $1 AND playerid = $2", inventory_id, player_id)
+                    logging.info(f"[INFO] Dropped fish item from inventory with inventoryid {inventory_id} for player {player_id}")
+            
+                    # Then remove it from the caught_fish table
+                    await self.db.execute("DELETE FROM caught_fish WHERE id = $1", caught_fish_id)
+                    logging.info(f"[INFO] Dropped fish item from caught_fish with caught_fish_id {caught_fish_id} for player {player_id}")
+                else:
+                    # If it's not a fish, simply remove it from the inventory table
+                    await self.db.execute("DELETE FROM inventory WHERE inventoryid = $1 AND playerid = $2", inventory_id, player_id)
+                    logging.info(f"[INFO] Dropped item with inventoryid {inventory_id} for player {player_id}")
+            except Exception as e:
+                logging.error(f"[ERROR] Failed to drop item with inventoryid {inventory_id} for player {player_id}: {e}")
+                await ctx.send("Error: Could not drop the item. Please try again later.")
+
+
+
+
+
 
             
     async def check_rare_fish(self, player_id):
