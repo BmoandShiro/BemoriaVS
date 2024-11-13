@@ -17,8 +17,9 @@ class Dave(NPCBase, Extension):
         logging.info(f"Interacting with Dave for player_id: {player_id}")
 
         # Check if player has the legendary fish in inventory
-        legendary_fish = await self.db.fetchrow("""
-            SELECT inv.inventoryid, cf.name FROM inventory inv
+        legendary_fish_count = await self.db.fetchval("""
+            SELECT COUNT(*)
+            FROM inventory inv
             JOIN caught_fish cf ON inv.caught_fish_id = cf.id
             WHERE inv.playerid = $1 AND cf.rarity = 'legendary'
         """, player_id)
@@ -33,37 +34,48 @@ class Dave(NPCBase, Extension):
             await ctx.send("Dave says: 'Scram kid, I don't have time for you.'")
             return
 
-        if legendary_fish:
-            await self.complete_quest(ctx, player_id, legendary_fish)
+        if legendary_fish_count > 0:
+            await self.complete_quest(ctx, player_id)
         else:
             await ctx.send("Dave says: 'I need to see a legendary fish to inspire me again.'")
 
-    async def complete_quest(self, ctx, player_id, legendary_fish):
+    async def complete_quest(self, ctx, player_id):
         logging.info(f"Completing Dave's quest for player_id: {player_id}")
 
+        # Delete one legendary fish from inventory
         await self.db.execute("""
-            DELETE FROM inventory WHERE inventoryid = $1
-        """, legendary_fish['inventoryid'])
+            DELETE FROM inventory
+            WHERE playerid = $1 AND itemid IN (
+                SELECT inv.itemid
+                FROM inventory inv
+                JOIN caught_fish cf ON inv.caught_fish_id = cf.id
+                WHERE inv.playerid = $1 AND cf.rarity = 'legendary'
+                LIMIT 1
+            )
+        """, player_id)
 
         await self.db.execute("""
             UPDATE player_quests SET status = 'completed'
             WHERE player_id = $1 AND quest_id = 2
         """, player_id)
 
-        await ctx.send(f"Dave says: 'You've inspired me with that legendary {legendary_fish['name']}! I'll reopen my shop as a thank you.'")
+        await ctx.send(f"Dave says: 'You've inspired me with that legendary fish! I'll reopen my shop as a thank you.'")
 
         quest_details = await self.db.fetchrow("""
             SELECT name, description FROM quests WHERE quest_id = $1
         """, 2)
         await send_quest_indicator(ctx, quest_details['name'], quest_details['description'])
 
-    @component_callback(re.compile(r"^talk_to_dave_player_\d+$"))
+
+
+    @component_callback(re.compile(r"^talk_to_dave_\d+$"))
     async def talk_to_dave_button_handler(self, ctx: ComponentContext):
         logging.info(f"Received interaction for talk_to_dave with custom_id: {ctx.custom_id}")
 
         try:
             # Extract player ID
-            original_user_id = int(ctx.custom_id.split("_")[2])
+            original_user_id = int(ctx.custom_id.split("_")[3])
+
 
             # Check if the correct user clicked the button
             if ctx.author.id != original_user_id:
