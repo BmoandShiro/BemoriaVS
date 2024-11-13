@@ -56,18 +56,25 @@ class playerinterface(Extension):
 
         # Send the embed with the buttons arranged in rows
         await ctx.send(embeds=[embed], components=button_rows, ephemeral=False)
+        
+
+
+
 
     async def get_location_based_buttons(self, location_id, player_id):
         db = self.bot.db
         # Fetch relevant commands based on location_id
         commands = await db.fetch("""
-            SELECT command_name, button_label, custom_id, condition, required_quest_id, required_quest_status, required_item_id
+            SELECT command_name, button_label, custom_id, button_color, condition, required_quest_id, required_quest_status, required_item_id
             FROM location_commands
             WHERE locationid = $1
         """, location_id)
 
         buttons = []
         for command in commands:
+            # Provide a default value for button_color if it's None or NULL
+            button_color = command.get('button_color') or 'PRIMARY'
+
             # Check if the command has quest requirements and evaluate them
             if command['required_quest_id'] is not None:
                 quest_status = await db.fetchval("""
@@ -88,10 +95,24 @@ class playerinterface(Extension):
                     # Skip this button if the required item is not in the player's inventory
                     continue
 
+            # Determine button style based on button_color field
+            button_style = ButtonStyle.PRIMARY  # Default style
+            if button_color == 'SUCCESS':
+                button_style = ButtonStyle.SUCCESS
+            elif button_color == 'DANGER':
+                button_style = ButtonStyle.DANGER
+            elif button_color == 'SECONDARY':
+                button_style = ButtonStyle.SECONDARY
+
             # Add the button if all conditions are met or if no conditions exist
-            buttons.append(Button(style=ButtonStyle.PRIMARY, label=command['button_label'], custom_id=command['custom_id']))
+            buttons.append(Button(style=button_style, label=command['button_label'], custom_id=command['custom_id']))
 
         return buttons
+
+           
+
+
+
 
 
     async def send_player_stats(self, ctx, player_id):
