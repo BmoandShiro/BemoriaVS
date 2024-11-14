@@ -7,6 +7,7 @@ import json
 from inventory_systems import InventorySystem  # Import the InventorySystem
 from interactions import ButtonStyle, Embed, Button, Extension, slash_command, ComponentContext
 import re
+import random
 #from Shop_Manager import ShopManager
 
 class playerinterface(Extension):
@@ -472,7 +473,7 @@ class playerinterface(Extension):
         else:
             await ctx.send("Quest not found.", ephemeral=True)
             
-    @component_callback(re.compile(r"^hunt_\d+$"))
+    '''@component_callback(re.compile(r"^hunt_\d+$"))
     async def hunt_button_handler(self, ctx: ComponentContext):
         original_user_id = int(ctx.custom_id.split("_")[1])
         if ctx.author.id != original_user_id:
@@ -487,7 +488,7 @@ class playerinterface(Extension):
         # Fetch enemies available in the current location
         enemies = await self.bot.db.fetch("""
             SELECT * FROM enemies
-            WHERE location = $1
+            WHERE locationid = $1
         """, current_location_id)
 
         if not enemies:
@@ -500,7 +501,7 @@ class playerinterface(Extension):
         # Start the combat using BattleSystem
         from Battle_System import BattleSystem
         battle_system = BattleSystem(self.bot)
-        await battle_system.start_combat(ctx, player_id, selected_enemy)
+        await battle_system.start_combat(ctx, player_id, selected_enemy)'''
         
 
     

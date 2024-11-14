@@ -1,4 +1,4 @@
-from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, Component_Callback, component_callback, Embed
+from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, component_callback, Embed
 import random
 import asyncio
 import re
@@ -43,7 +43,7 @@ class BattleSystem(Extension):
 
 
 
-    # New function for initiating a hunt
+    '''# New function for initiating a hunt
     async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
         # Fetch a random enemy from the location for hunting
         enemy = await self.db.fetchrow("""
@@ -66,7 +66,7 @@ class BattleSystem(Extension):
         enemy_attributes = self.extract_attributes(enemy)
 
         # Start combat - Send initial message and buttons for player action
-        await self.prompt_player_action(ctx, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances)
+        await self.prompt_player_action(ctx, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances)'''
 
         
 
@@ -98,7 +98,7 @@ class BattleSystem(Extension):
     async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
         # Fetch a random enemy from the location for hunting
         enemy = await self.db.fetchrow("""
-            SELECT * FROM enemies WHERE location_id = $1 ORDER BY RANDOM() LIMIT 1
+            SELECT * FROM enemies WHERE locationid = $1 ORDER BY RANDOM() LIMIT 1
         """, location_id)
         
         if not enemy:
