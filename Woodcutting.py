@@ -108,10 +108,6 @@ class WoodcuttingModule(Extension):
         inventory = Inventory(self.db, player_id)
         result_message = await inventory.add_item(item_id, number_of_logs)
 
-        # Send a detailed message about what was added
-        item_name = item_details['name']
-        await ctx.send(f"Added {number_of_logs}x {item_name} to your inventory.", ephemeral=True)
-
         # Update player experience points (assuming there's a column for woodcutting XP)
         xp_gained = tree['xp_gained']
         await self.db.execute("""
@@ -119,6 +115,10 @@ class WoodcuttingModule(Extension):
             SET woodcutting_xp = woodcutting_xp + $1
             WHERE playerid = $2
         """, xp_gained, player_id)
+
+        # Send a detailed message about what was added, including XP gained
+        item_name = item_details['name']
+        await ctx.send(f"Added {number_of_logs}x {item_name} to your inventory. You gained {xp_gained} XP in Woodcutting.", ephemeral=True)
 
 
 
