@@ -10,7 +10,7 @@ class ShopManager(Extension):
         # Define shops with their inventory, location, and availability criteria
         self.shops = {
             "Dave's Fishery": {
-                "location": "Dave's Fishery",
+                "location": "Dave Fishery",
                 "inventory": [
                     {"name": "Ocean Rod", "type": "Tool", "price": 7500, "rod_type": "Deep"},
                 ],
@@ -37,31 +37,39 @@ class ShopManager(Extension):
             color=0xFFD700  # Gold color for the shop interface
         )
 
+        # Add shop items to the embed
         if shop_items:
             for item in shop_items:
                 shop_embed.add_field(name=item["name"], value=f"Price: {item['price']} gold", inline=False)
 
-        # Create a 'Buy' button for each item available
-        buy_buttons = [
-            Button(style=ButtonStyle.SUCCESS, label=f"Buy {item['name']}", custom_id=f"buy_{item['name'].replace(' ', '_')}")
-            for item in shop_items
-        ]
+            # Create a dropdown selection for buying items
+            options = [
+                StringSelectOption(
+                    label=f"{item['name']} - {item['price']} gold",
+                    value=f"{item['name'].replace(' ', '_')}"
+                )
+                for item in shop_items
+            ]
 
-        # Add a sell button to allow the player to sell their fish
-        sell_button = Button(style=ButtonStyle.PRIMARY, label="Sell Fish", custom_id="sell_fish")
+            # Initialize the StringSelectMenu for buying items
+            buy_select = StringSelectMenu(
+                custom_id="select_item_to_buy",
+                placeholder="Select an item to buy"
+            )
+            # Set options after initializing
+            buy_select.options = options
 
-        # Arrange components into rows (up to 5 per row)
-        button_rows = [buy_buttons[i:i + 5] for i in range(0, len(buy_buttons), 5)]
-
-        # Always add the sell button as a separate row
-        button_rows.append([sell_button])
+            # Arrange components with sell button and buy selection dropdown
+            components = [[buy_select], [Button(style=ButtonStyle.PRIMARY, label="Sell Fish", custom_id="sell_fish")]]
+        else:
+            components = [[Button(style=ButtonStyle.PRIMARY, label="Sell Fish", custom_id="sell_fish")]]
 
         # Log to check how buttons are arranged
-        logging.info(f"Button rows for shop: {button_rows}")
+        logging.info(f"Components for shop: {components}")
 
-        # Send the shop embed along with buttons
+        # Send the shop embed along with components
         try:
-            await ctx.send(embeds=[shop_embed], components=button_rows, ephemeral=True)
+            await ctx.send(embeds=[shop_embed], components=components, ephemeral=True)
         except Exception as e:
             logging.error(f"Failed to send shop message: {e}")
 
@@ -146,6 +154,52 @@ class ShopManager(Extension):
         await self._add_gold(player_id, price)
 
         await ctx.send(f"You sold a {fish['fish_name']} for {price:.2f} gold!", ephemeral=True)
+        
+
+    @component_callback("select_item_to_buy")
+    async def select_item_to_buy_handler(self, ctx: ComponentContext):
+        await ctx.defer(ephemeral=True)  # Defer the response to avoid timeout
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        item_name = ctx.values[0].replace('_', ' ')
+
+        # Fetch the shop items for the current location
+        player_data = await self.bot.db.fetchrow("""
+            SELECT current_location
+            FROM player_data
+            WHERE playerid = $1
+        """, player_id)
+
+        if not player_data:
+            await ctx.send("Error: Unable to retrieve player data.", ephemeral=True)
+            return
+
+        location = player_data['current_location']
+        shop_items = await self.get_shop_items(location)
+
+        # Find the item in the shop
+        item_to_buy = next((item for item in shop_items if item["name"].lower() == item_name.lower()), None)
+
+        if not item_to_buy:
+            await ctx.send("Error: Item not found in this shop.", ephemeral=True)
+            return
+
+        # Check if player has enough gold
+        player_data = await self.bot.db.fetchrow("""
+            SELECT gold_balance
+            FROM player_data
+            WHERE playerid = $1
+        """, player_id)
+
+        if player_data["gold_balance"] < item_to_buy["price"]:
+            await ctx.send("You don't have enough gold to buy this item.", ephemeral=True)
+            return
+
+        # Deduct gold and add item to player's inventory
+        await self._deduct_gold(player_id, item_to_buy["price"])
+        await self._add_item_to_inventory(player_id, item_to_buy)
+
+        await ctx.send(f"You successfully bought {item_to_buy['name']} for {item_to_buy['price']} gold!", ephemeral=True)
+
 
 
 
