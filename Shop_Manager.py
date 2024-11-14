@@ -62,11 +62,8 @@ class ShopManager(Extension):
 
         location_name = location_data["name"]
 
-        # Fetch shop items for the location
-        shop_items = await self.get_shop_items(location_name)
-
-        # Log to check if shop items are retrieved properly
-        logging.info(f"Shop items for {location_name}: {shop_items}")
+        # Fetch shop items for the location using location_id
+        shop_items = await self.get_shop_items(location_id)
 
         # Create an embed to display shop items
         shop_embed = Embed(
@@ -88,12 +85,13 @@ class ShopManager(Extension):
                     value=f"{item['name'].replace(' ', '_')}"
                 ))
 
-            # Initialize the StringSelectMenu for buying items
+            # Initialize the StringSelectMenu for buying items (without options)
             buy_select = StringSelectMenu(
                 custom_id="select_item_to_buy",
-                placeholder="Select an item to buy",
-                options=options
+                placeholder="Select an item to buy"
             )
+            # Set the options after creating the select menu
+            buy_select.options = options
 
             # Arrange components with sell button and buy selection dropdown
             components = [[buy_select], [Button(style=ButtonStyle.PRIMARY, label="Sell Fish", custom_id="sell_fish")]]
@@ -108,6 +106,8 @@ class ShopManager(Extension):
             await ctx.send(embeds=[shop_embed], components=components, ephemeral=True)
         except Exception as e:
             logging.error(f"Failed to send shop message: {e}")
+
+
 
 
 
@@ -261,16 +261,18 @@ class ShopManager(Extension):
             WHERE playerid = $2
         """, amount, player_id)
         
-    async def get_shop_items(self, location):
-        # Fetch shop items for the given location from the database
+    async def get_shop_items(self, location_id):
+        # Fetch shop items for the given location ID from the database
         shop_items = await self.db.fetch("""
             SELECT i.name, s.price, i.type, s.quantity
             FROM shop_items s
             JOIN items i ON s.itemid = i.itemid
-            WHERE s.shop_location = $1
-        """, str(location))
-
+            WHERE s.locationid = $1
+        """, location_id)  # location_id should match the column type in the database
         return shop_items
+
+
+
     
     def _calculate_fish_value(self, base_value, length, weight, rarity, location):
         # Ensure all values are of type float
