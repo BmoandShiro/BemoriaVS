@@ -1,6 +1,5 @@
 from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, component_callback, Embed
 import random
-import asyncio
 import re
 
 class BattleSystem(Extension):
@@ -41,13 +40,11 @@ class BattleSystem(Extension):
         # Start the hunting battle sequence
         await self.start_hunt_battle(ctx, player_id, location_id)
 
-
-
-    '''# New function for initiating a hunt
     async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
         # Fetch a random enemy from the location for hunting
         enemy = await self.db.fetchrow("""
-            SELECT * FROM enemies WHERE locationid = $1 ORDER BY RANDOM() LIMIT 1
+            SELECT enemyid, name, health, agility, dexterity, attack_power, physical_resistance
+            FROM enemies WHERE locationid = $1 ORDER BY RANDOM() LIMIT 1
         """, location_id)
 
         if not enemy:
@@ -65,11 +62,8 @@ class BattleSystem(Extension):
         player_attributes = self.extract_attributes(player_stats)
         enemy_attributes = self.extract_attributes(enemy)
 
-        # Start combat - Send initial message and buttons for player action
-        await self.prompt_player_action(ctx, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances)'''
-
-        
-
+        # Start the player's turn by prompting the player for their action
+        await self.prompt_player_action(ctx, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances)
 
     async def prompt_player_action(self, ctx: SlashContext, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances):
         # Send a message to prompt the player for an action (attack or use ability)
@@ -82,132 +76,99 @@ class BattleSystem(Extension):
         attack_button = Button(
             style=ButtonStyle.PRIMARY,
             label="Attack",
-            custom_id=f"attack_{player_id}_{enemy['enemy_id']}"
+            custom_id=f"attack_{player_id}_{enemy['enemyid']}"
         )
         ability_button = Button(
             style=ButtonStyle.SECONDARY,
             label="Use Ability",
-            custom_id=f"ability_{player_id}_{enemy['enemy_id']}"
+            custom_id=f"ability_{player_id}_{enemy['enemyid']}"
         )
 
         components = [[attack_button, ability_button]]
 
         await ctx.send(embeds=[embed], components=components, ephemeral=True)
 
-    # New function for initiating a hunt
-    async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
-        # Fetch a random enemy from the location for hunting
-        enemy = await self.db.fetchrow("""
-            SELECT * FROM enemies WHERE locationid = $1 ORDER BY RANDOM() LIMIT 1
-        """, location_id)
-        
-        if not enemy:
-            await ctx.send("No enemies to hunt here.", ephemeral=True)
-            return
+    @component_callback(re.compile(r"^attack_\d+_\d+$"))
+    async def attack_button_handler(self, ctx: ComponentContext):
+        # Extract player ID and enemy ID from the custom ID
+        _, player_id, enemy_id = ctx.custom_id.split("_")
+        player_id = int(player_id)
+        enemy_id = int(enemy_id)
 
-        # Fetch player stats and initialize health values
+        await ctx.defer(ephemeral=True)  # Acknowledge the interaction
+
+        # Fetch player and enemy data
         player_stats = await self.db.fetch_player_details(player_id)
-        player_health = player_stats['health']
-        enemy_health = enemy['health']
+        enemy = await self.db.fetchrow("""
+            SELECT enemyid, name, health, agility, attack_power, physical_resistance
+            FROM enemies WHERE enemy_id = $1
+        """, enemy_id)
 
-        # Fetch resistances, attributes, and damage modifiers
-        player_resistances = self.extract_resistances(player_stats)
-        enemy_resistances = self.extract_resistances(enemy)
-        player_attributes = self.extract_attributes(player_stats)
-        enemy_attributes = self.extract_attributes(enemy)
-
-        # Loop until one side loses
-        while player_health > 0 and enemy_health > 0:
-            # Player action - either basic attack or ability
-            player_action = await self.choose_player_action(ctx, player_id)
-            if player_action == 'basic_attack':
-                player_attack_roll = self.roll_dice() + player_attributes['dexterity']
-                critical_hit = False
-
-                # Determine if it's a critical hit
-                if player_attack_roll - player_attributes['dexterity'] == 20 or player_attack_roll >= 2 * (10 + enemy_attributes['agility']):
-                    critical_hit = True
-
-                # Calculate hit success based on dexterity vs agility
-                if player_attack_roll > 10 + enemy_attributes['agility']:
-                    # Check if enemy blocks the attack
-                    if random.randint(1, 100) <= enemy_resistances.get('block_chance', 0):
-                        await ctx.send(f"{enemy['name']} blocked your attack!", ephemeral=True)
-                    else:
-                        base_damage = player_attributes['strength'] + player_stats['attack_power']
-                        resistance_percentage = enemy_resistances.get('physical_resistance', 0)
-                        multiplier = 1 - (resistance_percentage / 100)
-                        damage_dealt = max(0, base_damage * multiplier)
-
-                        if critical_hit:
-                            damage_dealt *= 1.5  # Critical hits deal 1.5x damage
-                        enemy_health -= damage_dealt
-                        await ctx.send(f"You dealt {damage_dealt} damage to {enemy['name']}. Remaining enemy health: {enemy_health}", ephemeral=True)
-
-            elif player_action == 'ability':
-                await self.use_ability(ctx, player_id, enemy, player_attributes, enemy_resistances, enemy_health)
-
-            # Enemy attack
-            enemy_attack_roll = self.roll_dice() + enemy_attributes['dexterity']
-            if enemy_attack_roll > 10 + player_attributes['agility']:  # Hit success based on dexterity vs agility
-                # Check if player blocks the attack
-                if random.randint(1, 100) <= player_resistances.get('block_chance', 0):
-                    await ctx.send(f"You blocked {enemy['name']}'s attack!", ephemeral=True)
-                else:
-                    damage_received = max(0, enemy['attack_power'] - player_resistances['physical_resistance'])
-                    player_health -= damage_received
-                    await ctx.send(f"{enemy['name']} dealt {damage_received} damage to you. Remaining player health: {player_health}", ephemeral=True)
-
-        # Determine the battle result
-        if player_health <= 0:
-            await ctx.send(f"You have been defeated by {enemy['name']}!", ephemeral=True)
-        else:
-            await ctx.send(f"You have defeated {enemy['name']}!", ephemeral=True)
-            await self.handle_enemy_defeat(ctx, player_id, enemy['enemy_id'])
-
-
-
-
-    async def choose_player_action(self, ctx, player_id):
-        """Prompt the player to choose an action (basic attack or use an ability)."""
-        # For simplicity, we'll assume player always does basic attack in this implementation
-        # This function can be expanded to take player input and choose abilities dynamically
-        return 'basic_attack'
-
-    async def use_ability(self, ctx, player_id, enemy, player_attributes, enemy_resistances, enemy_health):
-        """Handles the usage of a player's ability during battle."""
-        # Fetch player's abilities from the database
-        abilities = await self.db.fetch("""
-            SELECT * FROM abilities WHERE player_id = $1
-        """, player_id)
-
-        if not abilities:
-            await ctx.send("You have no abilities to use.", ephemeral=True)
+        if not player_stats or not enemy:
+            await ctx.send("The battle has ended or the data is not available.", ephemeral=True)
             return
 
-        # For now, pick the first ability (in a real scenario, you would prompt the user to choose)
-        ability = abilities[0]
+        # Player attack logic
+        player_attack_roll = self.roll_dice() + player_stats['dexterity']
+        critical_hit = False
 
-        # Calculate ability effect for each damage type
-        total_damage = 0
-        for damage_type in ['physical', 'fire', 'ice', 'lightning', 'poison', 'magic', 'crushing', 'piercing', 'water', 'earth', 'light', 'dark', 'air', 'corrosive']:
-            damage = ability.get(f'{damage_type}_damage', 0) + player_attributes.get(ability.get('scaling_attribute', ''), 0)
-            resistance = enemy_resistances.get(f'{damage_type}_resistance', 0)
-            damage_after_resistance = max(0, damage * (1 - resistance / 100.0))  # Updated to use percentage
-            total_damage += damage_after_resistance
+        if player_attack_roll - player_stats['dexterity'] == 20 or player_attack_roll >= 2 * (10 + enemy['agility']):
+            critical_hit = True
 
-        # Check if enemy blocks the ability
-        if random.randint(1, 100) <= enemy_resistances.get('block_chance', 0):
-            await ctx.send(f"{enemy['name']} blocked your ability: {ability['name']}!", ephemeral=True)
+        if player_attack_roll > 10 + enemy['agility']:
+            base_damage = player_stats['strength'] + player_stats.get('attack_power', 0)
+            resistance_percentage = enemy.get('physical_resistance', 0)
+            multiplier = 1 - (resistance_percentage / 100)
+            damage_dealt = max(0, base_damage * multiplier)
+
+            if critical_hit:
+                damage_dealt *= 1.5  # Critical hits deal 1.5x damage
+
+            enemy_health -= damage_dealt
+
+            await ctx.send(f"You dealt {damage_dealt} damage to {enemy['name']}. Remaining enemy health: {enemy_health}", ephemeral=True)
+
+            # Update the enemy's health
+            await self.db.execute("""
+                UPDATE enemies SET health = $1 WHERE enemy_id = $2
+            """, enemy_health, enemy_id)
+
         else:
-            # Apply total damage to enemy
-            enemy_health -= total_damage
-            await ctx.send(f"You used {ability['name']} and dealt {total_damage} damage to {enemy['name']}. Remaining enemy health: {enemy_health}", ephemeral=True)
+            await ctx.send(f"Your attack missed {enemy['name']}!", ephemeral=True)
 
-        # Update player's mana
-        player_attributes['mana'] -= ability['mana_cost']
+        # Check if enemy is defeated
+        if enemy_health <= 0:
+            await ctx.send(f"You have defeated {enemy['name']}!", ephemeral=True)
+            await self.handle_enemy_defeat(ctx, player_id, enemy_id)
+        else:
+            # Proceed to enemy's turn
+            await self.enemy_turn(ctx, player_id, player_stats['health'], enemy, enemy_health)
 
+    async def enemy_turn(self, ctx: SlashContext, player_id, player_health, enemy, enemy_health):
+        # Enemy attack logic
+        enemy_attack_roll = self.roll_dice() + enemy['dexterity']
+        if enemy_attack_roll > 10 + player_health:
+            # Calculate damage
+            damage_received = max(0, enemy.get('attack_power', 0) - player_health)
+            player_health -= damage_received
 
+            await ctx.send(f"{enemy['name']} dealt {damage_received} damage to you. Remaining player health: {player_health}", ephemeral=True)
+
+            # Update player's health in the database
+            await self.db.execute("""
+                UPDATE player_data SET health = $1 WHERE playerid = $2
+            """, player_health, player_id)
+
+            # Check if player is defeated
+            if player_health <= 0:
+                await ctx.send(f"You have been defeated by {enemy['name']}!", ephemeral=True)
+            else:
+                # Player's turn again
+                await self.prompt_player_action(ctx, player_id, player_health, enemy, enemy_health, self.extract_attributes(enemy), self.extract_resistances(enemy), {}, {})
+        else:
+            await ctx.send(f"{enemy['name']} missed you!", ephemeral=True)
+            # Player's turn again
+            await self.prompt_player_action(ctx, player_id, player_health, enemy, enemy_health, self.extract_attributes(enemy), self.extract_resistances(enemy), {}, {})
 
     @staticmethod
     def extract_resistances(entity):
@@ -228,10 +189,8 @@ class BattleSystem(Extension):
             'air_resistance': entity.get('air_resistance', 0),
             'sleep_resistance': entity.get('sleep_resistance', 0),
             'block_chance': entity.get('block_chance', 0),
-            'corrosive_resistance': entity.get('corrosive_resistance', 0)  # New corrosive resistance
+            'corrosive_resistance': entity.get('corrosive_resistance', 0)
         }
-
-
 
     @staticmethod
     def extract_attributes(entity):
@@ -246,10 +205,8 @@ class BattleSystem(Extension):
             'charisma': entity.get('charisma', 0),
             'willpower': entity.get('willpower', 0),
             'luck': entity.get('luck', 0),
-            'corrosive_damage': entity.get('corrosive_damage', 0)  # New corrosive damage attribute
+            'corrosive_damage': entity.get('corrosive_damage', 0)
         }
-
-        
 
     async def handle_enemy_defeat(self, ctx: SlashContext, player_id: int, enemy_id: int):
         # Fetch drop chances for this enemy
