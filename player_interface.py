@@ -501,6 +501,9 @@ class playerinterface(Extension):
         from Battle_System import BattleSystem
         battle_system = BattleSystem(self.bot)
         await battle_system.start_combat(ctx, player_id, selected_enemy)
+        
+
+    
     
 
 # Setup function to load this as an extension

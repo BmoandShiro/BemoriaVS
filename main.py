@@ -10,13 +10,14 @@ from travelsystem import TravelSystem, setup as ts_setup
 from GuildConfig import GUILD_IDS
 from Inventory import Inventory
 from inventory_systems import InventorySystem  # Import the InventorySystem wrapper
-from travelsystem import TravelSystem
 #from NPC_Finn import setup as setup_finn
 from NPC_Manager import NPCManager
 from inventory_systems import setup as inventory_setup
 #from Fishing import setup as fishing_setup
 from Fishing import FishingModule
 from Shop_Manager import ShopManager
+from Woodcutting import WoodcuttingModule, setup as woodcutting_setup 
+import os
 
 logging.basicConfig(level=logging.INFO)
 
@@ -51,6 +52,8 @@ bot.inventory_system = inventory_system
 travel_system = TravelSystem(bot)
 bot.travel_system = travel_system
 
+#woodcutting_setup(bot)
+bot.woodcutting_module = WoodcuttingModule(bot)
 #inventory_setup(bot)
 
 bot.fishing_module = FishingModule(bot)
