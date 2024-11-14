@@ -113,13 +113,13 @@ class ShopManager:
             SELECT base_value FROM fish WHERE name = $1
         """, fish_name)
     
-    async def handle_shop(ctx, player):
+    async def handle_shop(self, ctx, player_data):
         # Fetch available items for the current shop location
-        location = player.current_location
+        location = player_data['current_location']
         shop_items = await self.get_shop_items(location)
 
         if not shop_items:
-            await ctx.send("There are no items available in this shop.")
+            await ctx.send("There are no items available in this shop.", ephemeral=True)
             return
 
         # Create an embed to display shop items
@@ -142,4 +142,5 @@ class ShopManager:
         button_rows = [shop_buttons[i:i + 5] for i in range(0, len(shop_buttons), 5)]
 
         # Send the shop embed along with buttons
-        await ctx.send(embeds=[shop_embed], components=button_rows)
+        await ctx.send(embeds=[shop_embed], components=button_rows, ephemeral=True)
+

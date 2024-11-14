@@ -7,7 +7,7 @@ import json
 from inventory_systems import InventorySystem  # Import the InventorySystem
 from interactions import ButtonStyle, Embed, Button, Extension, slash_command, ComponentContext
 import re
-
+#from Shop_Manager import ShopManager
 
 class playerinterface(Extension):
     def __init__(self, bot):
@@ -391,6 +391,28 @@ class playerinterface(Extension):
         player_data = await self.bot.db.fetch_player_details(player_id)
         current_location_id = player_data['current_location']
         await self.bot.fishing_module.fish_button_action(current_location_id, ctx)
+
+
+
+    @component_callback(re.compile(r"^shop_\d+$"))
+    async def shop_button_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[1])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        await ctx.defer(ephemeral=True)  # Acknowledge the interaction to prevent expiration
+
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        player_data = await self.bot.db.fetch_player_details(player_id)
+
+        current_location = player_data['current_location']
+
+        # Access the shop_manager through the bot instance
+        if hasattr(self.bot, "shop_manager") and self.bot.shop_manager:
+            await self.bot.shop_manager.handle_shop(ctx, player_data)
+        else:
+            await ctx.send("Shop system is not available.", ephemeral=True)
 
 
     @component_callback(re.compile(r"^travel_\d+_\d+$"))
