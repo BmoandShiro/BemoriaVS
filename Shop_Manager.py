@@ -106,7 +106,6 @@ class ShopManager(Extension):
     @component_callback("select_fish_to_sell")
     async def select_fish_to_sell_handler(self, ctx: ComponentContext):
         await ctx.defer(ephemeral=True)
-        inventory_id = int(ctx.values[0])
         player_id = await self.bot.db.get_or_create_player(ctx.author.id)
 
         # Fetch the details of the fish being sold
@@ -115,21 +114,40 @@ class ShopManager(Extension):
             FROM inventory inv
             JOIN caught_fish cf ON inv.caught_fish_id = cf.id
             WHERE inv.inventoryid = $1 AND inv.playerid = $2
-        """, inventory_id, player_id)
+        """, int(ctx.values[0]), player_id)
 
         if not fish:
             await ctx.send("Error: The selected fish could not be found.", ephemeral=True)
             return
 
-        # Calculate the value of the fish based on its length, weight, and rarity
+        # Fetch player data to get the current location
+        player_data = await self.bot.db.fetchrow("""
+            SELECT current_location
+            FROM player_data
+            WHERE playerid = $1
+        """, player_id)
+
+        if not player_data:
+            await ctx.send("Error: Unable to retrieve player data.", ephemeral=True)
+            return
+
+        # Calculate the value of the fish
         base_value = await self._get_base_value(fish["fish_name"])
-        price = self.calculate_fish_value(base_value, fish["length"], fish["weight"], fish["rarity"], player_id)
+        price = self._calculate_fish_value(
+            base_value, 
+            fish["length"], 
+            fish["weight"], 
+            fish["rarity"], 
+            player_data['current_location']
+        )
 
         # Remove the fish from inventory and add gold to player's balance
-        await self._remove_fish_from_inventory(player_id, inventory_id)
+        await self._remove_fish_from_inventory(player_id, int(ctx.values[0]))
         await self._add_gold(player_id, price)
 
         await ctx.send(f"You sold a {fish['fish_name']} for {price:.2f} gold!", ephemeral=True)
+
+
 
     async def _get_base_value(self, fish_name):
         # Fetch base value from a fish table using bot.db
@@ -157,6 +175,27 @@ class ShopManager(Extension):
         if location in self.shops:
             return self.shops[location]["inventory"]
         return []
+    
+    def _calculate_fish_value(self, base_value, length, weight, rarity, location):
+        # Ensure all values are of type float
+        base_value = float(base_value)
+        length = float(length)
+        weight = float(weight)
+
+        # Calculate value based on base value, length, weight, and rarity
+        rarity_multiplier = {
+            "common": 1.0, 
+            "uncommon": 1.1, 
+            "rare": 1.25, 
+            "very rare": 1.5, 
+            "legendary": 2.0
+        }
+        location_multiplier = self.shops.get(location, {}).get("sell_multiplier", 1.0)
+
+        # Base value modified by length and weight, then adjusted by rarity and location
+        value = (base_value * length * weight) * rarity_multiplier.get(rarity.lower(), 1.0) * location_multiplier
+        return value
+
 
 # Setup function for ShopManager
 def setup(bot):
