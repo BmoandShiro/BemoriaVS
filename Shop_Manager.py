@@ -57,25 +57,23 @@ class ShopManager(Extension):
 
         # Add shop items to the embed
         if shop_items:
+            options = []
             for item in shop_items:
+                # Add items to the embed
                 shop_embed.add_field(name=item["name"], value=f"Price: {item['price']} gold", inline=False)
 
-            # Create a dropdown selection for buying items
-            options = [
-                StringSelectOption(
+                # Prepare options for StringSelectMenu
+                options.append(StringSelectOption(
                     label=f"{item['name']} - {item['price']} gold",
                     value=f"{item['name'].replace(' ', '_')}"
-                )
-                for item in shop_items
-            ]
+                ))
 
             # Initialize the StringSelectMenu for buying items
             buy_select = StringSelectMenu(
                 custom_id="select_item_to_buy",
-                placeholder="Select an item to buy"
+                placeholder="Select an item to buy",
+                options=options
             )
-            # Set options after initializing
-            buy_select.options = options
 
             # Arrange components with sell button and buy selection dropdown
             components = [[buy_select], [Button(style=ButtonStyle.PRIMARY, label="Sell Fish", custom_id="sell_fish")]]
@@ -273,6 +271,20 @@ class ShopManager(Extension):
         value = (base_value * length * weight) * rarity_multiplier.get(rarity.lower(), 1.0) * location_multiplier
         return value
 
+    async def _deduct_gold(self, player_id, amount):
+        # Deduct the gold from the player's balance in the DB
+        await self.db.execute("""
+            UPDATE player_data
+            SET gold_balance = gold_balance - $1
+            WHERE playerid = $2
+        """, amount, player_id)
+
+    async def _add_item_to_inventory(self, player_id, item):
+        # Add the purchased item to the player's inventory
+        await self.db.execute("""
+            INSERT INTO inventory (playerid, itemid, quantity, isequipped)
+            VALUES ($1, (SELECT itemid FROM items WHERE name = $2), 1, FALSE)
+        """, player_id, item['name'])
 
 # Setup function for ShopManager
 def setup(bot):
