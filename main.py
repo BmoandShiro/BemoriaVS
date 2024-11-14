@@ -56,7 +56,7 @@ bot.travel_system = travel_system
 bot.fishing_module = FishingModule(bot)
 #fishing_setup(bot)
 
-shop_manager = ShopManager()
+shop_manager = ShopManager(bot)
 bot.shop_manager = shop_manager
 
 
