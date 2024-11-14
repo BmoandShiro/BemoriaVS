@@ -91,6 +91,23 @@ class WoodcuttingModule(Extension):
             await ctx.send("No trees to chop here.", ephemeral=True)
             return
 
+        # Check if the player has the correct axe equipped
+        axetype_required = tree['axetype']
+        equipped_axe = await self.db.fetchrow("""
+            SELECT i.itemid, i.name, i.type
+            FROM inventory inv
+            JOIN items i ON inv.itemid = i.itemid
+            WHERE inv.playerid = $1 AND inv.isequipped = TRUE AND i.type = 'Axe'
+        """, player_id)
+
+        if not equipped_axe:
+            await ctx.send("You need to equip an axe to chop down trees.", ephemeral=True)
+            return
+
+        if equipped_axe['type'].lower() != axetype_required.lower():
+            await ctx.send(f"You need a {axetype_required} axe to chop down this type of tree.", ephemeral=True)
+            return
+
         # Add log item to inventory using itemid from tree
         item_id = tree['itemid']
         number_of_logs = tree['number_of_logs']
