@@ -91,9 +91,9 @@ class BattleSystem(Extension):
     @component_callback(re.compile(r"^attack_\d+_\d+$"))
     async def attack_button_handler(self, ctx: ComponentContext):
         # Extract player ID and enemy ID from the custom ID
-        _, player_id, enemy_id = ctx.custom_id.split("_")
+        _, player_id, enemyid = ctx.custom_id.split("_")
         player_id = int(player_id)
-        enemy_id = int(enemy_id)
+        enemyid = int(enemyid)
 
         await ctx.defer(ephemeral=True)  # Acknowledge the interaction
 
@@ -101,8 +101,8 @@ class BattleSystem(Extension):
         player_stats = await self.db.fetch_player_details(player_id)
         enemy = await self.db.fetchrow("""
             SELECT enemyid, name, health, agility, attack_power, physical_resistance
-            FROM enemies WHERE enemy_id = $1
-        """, enemy_id)
+            FROM enemies WHERE enemyid = $1
+        """, enemyid)
 
         if not player_stats or not enemy:
             await ctx.send("The battle has ended or the data is not available.", ephemeral=True)
@@ -130,8 +130,8 @@ class BattleSystem(Extension):
 
             # Update the enemy's health
             await self.db.execute("""
-                UPDATE enemies SET health = $1 WHERE enemy_id = $2
-            """, enemy_health, enemy_id)
+                UPDATE enemies SET health = $1 WHERE enemyid = $2
+            """, enemy_health, enemyid)
 
         else:
             await ctx.send(f"Your attack missed {enemy['name']}!", ephemeral=True)
@@ -139,7 +139,7 @@ class BattleSystem(Extension):
         # Check if enemy is defeated
         if enemy_health <= 0:
             await ctx.send(f"You have defeated {enemy['name']}!", ephemeral=True)
-            await self.handle_enemy_defeat(ctx, player_id, enemy_id)
+            await self.handle_enemy_defeat(ctx, player_id, enemyid)
         else:
             # Proceed to enemy's turn
             await self.enemy_turn(ctx, player_id, player_stats['health'], enemy, enemy_health)
@@ -208,13 +208,13 @@ class BattleSystem(Extension):
             'corrosive_damage': entity.get('corrosive_damage', 0)
         }
 
-    async def handle_enemy_defeat(self, ctx: SlashContext, player_id: int, enemy_id: int):
+    async def handle_enemy_defeat(self, ctx: SlashContext, player_id: int, enemyid: int):
         # Fetch drop chances for this enemy
         drop_list = await self.db.fetch("""
             SELECT edc.item_id, edc.drop_chance
             FROM enemy_drop_chances edc
-            WHERE edc.enemy_id = $1
-        """, enemy_id)
+            WHERE edc.enemyid = $1
+        """, enemyid)
 
         if not drop_list:
             await ctx.send("No loot available from this enemy.", ephemeral=True)
