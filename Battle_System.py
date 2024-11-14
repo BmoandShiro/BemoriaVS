@@ -1,6 +1,7 @@
-from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, Component_Callback, component_callback
+from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, Component_Callback, component_callback, Embed
 import random
 import asyncio
+import re
 
 class BattleSystem(Extension):
     def __init__(self, bot):
@@ -12,9 +13,17 @@ class BattleSystem(Extension):
         """Simulates a dice roll with given sides (default d20)."""
         return random.randint(1, sides)
 
-    @component_callback("hunt_button")
+    @component_callback(re.compile(r"^hunt_\d+$"))
     async def hunt_button_handler(self, ctx: ComponentContext):
-        # Get the player's ID and current location to initiate a hunt
+        # Extract player ID from the custom ID
+        original_user_id = int(ctx.custom_id.split("_")[1])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        await ctx.defer(ephemeral=True)  # Acknowledge the interaction to prevent expiration
+
+        # Get player data and proceed with hunting logic
         player_id = await self.db.get_or_create_player(ctx.author.id)
         player_data = await self.db.fetchrow("""
             SELECT current_location
@@ -32,14 +41,15 @@ class BattleSystem(Extension):
         # Start the hunting battle sequence
         await self.start_hunt_battle(ctx, player_id, location_id)
 
+
+
     # New function for initiating a hunt
     async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
         # Fetch a random enemy from the location for hunting
         enemy = await self.db.fetchrow("""
-            SELECT * FROM enemies WHERE location_id = $1 ORDER BY RANDOM() LIMIT 1
+            SELECT * FROM enemies WHERE locationid = $1 ORDER BY RANDOM() LIMIT 1
         """, location_id)
 
-        
         if not enemy:
             await ctx.send("No enemies to hunt here.", ephemeral=True)
             return
@@ -57,6 +67,7 @@ class BattleSystem(Extension):
 
         # Start combat - Send initial message and buttons for player action
         await self.prompt_player_action(ctx, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances)
+
         
 
 
