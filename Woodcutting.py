@@ -3,6 +3,8 @@ import random
 import asyncio
 from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, component_callback
 import re
+from Inventory import Inventory
+
 
 class WoodcuttingModule(Extension):
     def __init__(self, bot):
@@ -79,24 +81,46 @@ class WoodcuttingModule(Extension):
             WHERE playerid = $2
         """, xp_gained, player_id)
         
-    async def start_chop_action(self, ctx: SlashContext, player_id: int, location_id: int):
-        # Fetch a random tree from the current location to chop
+    async def start_chop_action(self, ctx: ComponentContext, player_id: int, location_id: int):
+        # Fetch a tree based on the current location
         tree = await self.db.fetchrow("""
-            SELECT * FROM trees
-            WHERE locationid = $1
-            ORDER BY RANDOM() LIMIT 1
+            SELECT * FROM trees WHERE locationid = $1 ORDER BY RANDOM() LIMIT 1
         """, location_id)
 
-    
         if not tree:
             await ctx.send("No trees to chop here.", ephemeral=True)
             return
 
-        # Proceed with woodcutting logic, similar to how you handle fishing
-        await ctx.send(f"You start chopping the {tree['treetype']}...", ephemeral=True)
+        # Add log item to inventory using itemid from tree
+        item_id = tree['itemid']
+        number_of_logs = tree['number_of_logs']
 
-        # Simulate chopping time, or fetch player skills and level to calculate
-        # Chopping results and log gathering
+        # Fetch item details from items table to get the name
+        item_details = await self.db.fetchrow("""
+            SELECT name FROM items WHERE itemid = $1
+        """, item_id)
+
+        if not item_details:
+            await ctx.send("Error: Unable to retrieve item details.", ephemeral=True)
+            return
+
+        # Use the imported Inventory class to add items to inventory
+        inventory = Inventory(self.db, player_id)
+        result_message = await inventory.add_item(item_id, number_of_logs)
+
+        # Send a detailed message about what was added
+        item_name = item_details['name']
+        await ctx.send(f"Added {number_of_logs}x {item_name} to your inventory.", ephemeral=True)
+
+        # Update player experience points (assuming there's a column for woodcutting XP)
+        xp_gained = tree['xp_gained']
+        await self.db.execute("""
+            UPDATE player_skills_xp
+            SET woodcutting_xp = woodcutting_xp + $1
+            WHERE playerid = $2
+        """, xp_gained, player_id)
+
+
 
 
 # Setup function to load this as an extension
