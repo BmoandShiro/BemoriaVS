@@ -472,37 +472,35 @@ class playerinterface(Extension):
         else:
             await ctx.send("Quest not found.", ephemeral=True)
             
-    '''@component_callback(re.compile(r"^transfer_to_inventory_\d+$"))
-    async def transfer_to_inventory_handler(self, ctx: ComponentContext):
-        # Extract the user ID from the custom ID
-        original_user_id = int(ctx.custom_id.split("_")[-1])
-        # Check if the button interaction is from the same user
+    @component_callback(re.compile(r"^hunt_\d+$"))
+    async def hunt_button_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[1])
         if ctx.author.id != original_user_id:
             await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
             return
 
-        # Delegate the action to the InventorySystem module
-        if self.inventory_system:
-            await ctx.defer(ephemeral=True)  # Acknowledge the interaction to prevent expiration
-            await self.inventory_system.transfer_to_inventory_handler(ctx)
-        else:
-            await ctx.send("Inventory system is not available.", ephemeral=True)
+        await ctx.defer(ephemeral=True)
 
-    @component_callback(re.compile(r"^transfer_to_bank_\d+$"))
-    async def transfer_to_bank_handler(self, ctx: ComponentContext):
-        # Extract the user ID from the custom ID
-        original_user_id = int(ctx.custom_id.split("_")[-1])
-        # Check if the button interaction is from the same user
-        if ctx.author.id != original_user_id:
-            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        current_location_id = await self.bot.db.fetchval("SELECT current_location FROM player_data WHERE playerid = $1", player_id)
+
+        # Fetch enemies available in the current location
+        enemies = await self.bot.db.fetch("""
+            SELECT * FROM enemies
+            WHERE location = $1
+        """, current_location_id)
+
+        if not enemies:
+            await ctx.send("There are no enemies to hunt here.", ephemeral=True)
             return
 
-        # Delegate the action to the InventorySystem module
-        if self.inventory_system:
-            await ctx.defer(ephemeral=True)  # Acknowledge the interaction to prevent expiration
-            await self.inventory_system.transfer_to_bank_handler(ctx)
-        else:
-            await ctx.send("Inventory system is not available.", ephemeral=True)'''
+        # Select an enemy randomly from the list
+        selected_enemy = random.choice(enemies)
+
+        # Start the combat using BattleSystem
+        from Battle_System import BattleSystem
+        battle_system = BattleSystem(self.bot)
+        await battle_system.start_combat(ctx, player_id, selected_enemy)
     
 
 # Setup function to load this as an extension

@@ -1,5 +1,6 @@
-from interactions import SlashContext, Extension, Button, ButtonStyle
+from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, Component_Callback, component_callback
 import random
+import asyncio
 
 class BattleSystem(Extension):
     def __init__(self, bot):
@@ -11,18 +12,90 @@ class BattleSystem(Extension):
         """Simulates a dice roll with given sides (default d20)."""
         return random.randint(1, sides)
 
-    async def start_battle(self, ctx: SlashContext, player_id: int, location_id: int):
-        # Fetch a random enemy from the location
+    @component_callback("hunt_button")
+    async def hunt_button_handler(self, ctx: ComponentContext):
+        # Get the player's ID and current location to initiate a hunt
+        player_id = await self.db.get_or_create_player(ctx.author.id)
+        player_data = await self.db.fetchrow("""
+            SELECT current_location
+            FROM player_data
+            WHERE playerid = $1
+        """, player_id)
+
+        if not player_data:
+            await ctx.send("Error: Unable to retrieve player data.", ephemeral=True)
+            return
+
+        # Fetch the current location ID for hunting
+        location_id = player_data['current_location']
+
+        # Start the hunting battle sequence
+        await self.start_hunt_battle(ctx, player_id, location_id)
+
+    # New function for initiating a hunt
+    async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
+        # Fetch a random enemy from the location for hunting
+        enemy = await self.db.fetchrow("""
+            SELECT * FROM enemies WHERE location_id = $1 ORDER BY RANDOM() LIMIT 1
+        """, location_id)
+
+        
+        if not enemy:
+            await ctx.send("No enemies to hunt here.", ephemeral=True)
+            return
+
+        # Fetch player stats and initialize health values
+        player_stats = await self.db.fetch_player_details(player_id)
+        player_health = player_stats['health']
+        enemy_health = enemy['health']
+
+        # Fetch resistances, attributes, and damage modifiers
+        player_resistances = self.extract_resistances(player_stats)
+        enemy_resistances = self.extract_resistances(enemy)
+        player_attributes = self.extract_attributes(player_stats)
+        enemy_attributes = self.extract_attributes(enemy)
+
+        # Start combat - Send initial message and buttons for player action
+        await self.prompt_player_action(ctx, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances)
+        
+
+
+    async def prompt_player_action(self, ctx: SlashContext, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances):
+        # Send a message to prompt the player for an action (attack or use ability)
+        embed = Embed(
+            title=f"Battle with {enemy['name']}",
+            description=f"Your health: {player_health}\n{enemy['name']}'s health: {enemy_health}",
+            color=0xFF0000  # Red color for battle
+        )
+
+        attack_button = Button(
+            style=ButtonStyle.PRIMARY,
+            label="Attack",
+            custom_id=f"attack_{player_id}_{enemy['enemy_id']}"
+        )
+        ability_button = Button(
+            style=ButtonStyle.SECONDARY,
+            label="Use Ability",
+            custom_id=f"ability_{player_id}_{enemy['enemy_id']}"
+        )
+
+        components = [[attack_button, ability_button]]
+
+        await ctx.send(embeds=[embed], components=components, ephemeral=True)
+
+    # New function for initiating a hunt
+    async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
+        # Fetch a random enemy from the location for hunting
         enemy = await self.db.fetchrow("""
             SELECT * FROM enemies WHERE location_id = $1 ORDER BY RANDOM() LIMIT 1
         """, location_id)
         
         if not enemy:
-            await ctx.send("No enemies to fight here.", ephemeral=True)
+            await ctx.send("No enemies to hunt here.", ephemeral=True)
             return
 
+        # Fetch player stats and initialize health values
         player_stats = await self.db.fetch_player_details(player_id)
-        
         player_health = player_stats['health']
         enemy_health = enemy['health']
 
@@ -50,12 +123,16 @@ class BattleSystem(Extension):
                     if random.randint(1, 100) <= enemy_resistances.get('block_chance', 0):
                         await ctx.send(f"{enemy['name']} blocked your attack!", ephemeral=True)
                     else:
-                        base_damage = player_attributes['strength'] + player_stats['attack_power'] - enemy_resistances['physical_resistance']
-                        damage_dealt = max(0, base_damage)
+                        base_damage = player_attributes['strength'] + player_stats['attack_power']
+                        resistance_percentage = enemy_resistances.get('physical_resistance', 0)
+                        multiplier = 1 - (resistance_percentage / 100)
+                        damage_dealt = max(0, base_damage * multiplier)
+
                         if critical_hit:
                             damage_dealt *= 1.5  # Critical hits deal 1.5x damage
                         enemy_health -= damage_dealt
                         await ctx.send(f"You dealt {damage_dealt} damage to {enemy['name']}. Remaining enemy health: {enemy_health}", ephemeral=True)
+
             elif player_action == 'ability':
                 await self.use_ability(ctx, player_id, enemy, player_attributes, enemy_resistances, enemy_health)
 
@@ -70,11 +147,15 @@ class BattleSystem(Extension):
                     player_health -= damage_received
                     await ctx.send(f"{enemy['name']} dealt {damage_received} damage to you. Remaining player health: {player_health}", ephemeral=True)
 
+        # Determine the battle result
         if player_health <= 0:
             await ctx.send(f"You have been defeated by {enemy['name']}!", ephemeral=True)
         else:
             await ctx.send(f"You have defeated {enemy['name']}!", ephemeral=True)
             await self.handle_enemy_defeat(ctx, player_id, enemy['enemy_id'])
+
+
+
 
     async def choose_player_action(self, ctx, player_id):
         """Prompt the player to choose an action (basic attack or use an ability)."""
@@ -100,8 +181,13 @@ class BattleSystem(Extension):
         total_damage = 0
         for damage_type in ['physical', 'fire', 'ice', 'lightning', 'poison', 'magic', 'crushing', 'piercing', 'water', 'earth', 'light', 'dark', 'air']:
             damage = ability[f'{damage_type}_damage'] + player_attributes.get(ability['scaling_attribute'], 0)
-            resistance = enemy_resistances.get(f'{damage_type}_resistance', 0)
-            damage_after_resistance = max(0, damage - resistance)
+            resistance_percentage = enemy_resistances.get(f'{damage_type}_resistance', 0)
+
+            # Calculate the resistance multiplier based on the percentage
+            multiplier = 1 - (resistance_percentage / 100)
+
+            # Apply the multiplier to the damage
+            damage_after_resistance = max(0, damage * multiplier)
             total_damage += damage_after_resistance
 
         # Check if enemy blocks the ability
@@ -115,9 +201,10 @@ class BattleSystem(Extension):
         # Update player's mana
         player_attributes['mana'] -= ability['mana_cost']
 
+
     @staticmethod
     def extract_resistances(entity):
-        """Extract resistances from an entity (player or enemy)."""
+        """Extract resistances from an entity (player or enemy) as percentages."""
         return {
             'fire_resistance': entity.get('fire_resistance', 0),
             'ice_resistance': entity.get('ice_resistance', 0),
@@ -135,6 +222,7 @@ class BattleSystem(Extension):
             'sleep_resistance': entity.get('sleep_resistance', 0),
             'block_chance': entity.get('block_chance', 0)
         }
+
 
     @staticmethod
     def extract_attributes(entity):
