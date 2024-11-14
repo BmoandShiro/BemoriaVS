@@ -64,6 +64,7 @@ class BattleSystem(Extension):
 
         await ctx.send(embeds=[embed], components=components, ephemeral=True)
 
+    # New function for initiating a hunt
     async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
         # Fetch a random enemy from the location for hunting
         enemy = await self.db.fetchrow("""
@@ -75,7 +76,7 @@ class BattleSystem(Extension):
             return
 
         # Fetch player stats and initialize health values
-        player_stats = await self.db.fetch_player_details(player_id)
+        player_stats = dict(await self.db.fetch_player_details(player_id))  # Convert asyncpg.Record to dict
         player_health = player_stats['health']
         enemy_health = enemy['health']
 
@@ -85,82 +86,87 @@ class BattleSystem(Extension):
         player_attributes = self.extract_attributes(player_stats)
         enemy_attributes = self.extract_attributes(enemy)
 
-        # Start combat - Send initial message and buttons for player action
+        # Prompt player for action
         await self.prompt_player_action(ctx, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances)
 
     @component_callback(re.compile(r"^attack_\d+_\d+$"))
     async def attack_button_handler(self, ctx: ComponentContext):
-        # Extract player and enemy IDs from the custom ID
-        _, player_id, enemyid = ctx.custom_id.split("_")
-        player_id = int(player_id)
-        enemyid = int(enemyid)
+        await ctx.defer(ephemeral=True)
 
-        # Fetch player and enemy stats
-        player_stats = await self.db.fetchrow("""
-            SELECT * FROM player_data WHERE playerid = $1
-        """, player_id)
+        # Extract player ID and enemy ID from the custom ID
+        ids = ctx.custom_id.split("_")
+        player_id = int(ids[1])
+        enemy_id = int(ids[2])
+
+        # Fetch player and enemy details
+        player_stats = dict(await self.db.fetch_player_details(player_id))  # Convert asyncpg.Record to dict
         enemy = await self.db.fetchrow("""
             SELECT * FROM enemies WHERE enemyid = $1
-        """, enemyid)
+        """, enemy_id)
 
-        if not player_stats or not enemy:
-            await ctx.send("Error: Unable to retrieve player or enemy data.", ephemeral=True)
-            return
+        player_health = player_stats['health']
+        enemy_health = enemy['health']
 
-        # Roll for player's attack
-        player_attack_roll = self.roll_dice() + player_stats['strength']
+        # Fetch resistances, attributes, and damage modifiers
+        player_resistances = self.extract_resistances(player_stats)
+        enemy_resistances = self.extract_resistances(enemy)
+        player_attributes = self.extract_attributes(player_stats)
+        enemy_attributes = self.extract_attributes(enemy)
+
+        # Player's attack logic
+        player_attack_roll = self.roll_dice() + player_attributes['dexterity']
         critical_hit = False
 
         # Determine if it's a critical hit
-        if player_attack_roll - player_stats['strength'] == 20 or player_attack_roll >= 2 * (10 + enemy['agility']):
+        if player_attack_roll - player_attributes['dexterity'] == 20 or player_attack_roll >= 2 * (10 + enemy_attributes['agility']):
             critical_hit = True
 
-        # Calculate hit success based on strength vs agility
-        if player_attack_roll > 10 + enemy['agility']:
+        # Calculate hit success based on dexterity vs agility
+        if player_attack_roll > 10 + enemy_attributes['agility']:
             # Check if enemy blocks the attack
-            if random.randint(1, 100) <= enemy.get('block_chance', 0):
+            if random.randint(1, 100) <= enemy_resistances.get('block_chance', 0):
                 await ctx.send(f"{enemy['name']} blocked your attack!", ephemeral=True)
             else:
-                base_damage = player_stats['strength']
-                resistance_percentage = enemy.get('physical_resistance', 0)
+                base_damage = player_attributes['strength']
+                resistance_percentage = enemy_resistances.get('physical_resistance', 0)
                 multiplier = 1 - (resistance_percentage / 100)
                 damage_dealt = max(0, base_damage * multiplier)
 
                 if critical_hit:
                     damage_dealt *= 1.5  # Critical hits deal 1.5x damage
-                enemy['health'] -= damage_dealt
-                await ctx.send(f"You dealt {damage_dealt} damage to {enemy['name']}. Remaining enemy health: {enemy['health']}", ephemeral=True)
-        else:
-            await ctx.send(f"Your attack missed {enemy['name']}!", ephemeral=True)
+                enemy_health -= damage_dealt
 
-        # Check if the enemy is defeated
-        if enemy['health'] <= 0:
+                await ctx.send(f"You dealt {damage_dealt} damage to {enemy['name']}. Remaining enemy health: {enemy_health}", ephemeral=True)
+
+        # Update enemy's health
+        if enemy_health <= 0:
             await ctx.send(f"You have defeated {enemy['name']}!", ephemeral=True)
-            await self.handle_enemy_defeat(ctx, player_id, enemyid)
+            await self.handle_enemy_defeat(ctx, player_id, enemy_id)
         else:
-            # Enemy's turn to attack
-            await self.enemy_attack(ctx, player_id, enemy)
+            await self.enemy_attack(ctx, player_id, enemy, player_stats, enemy_health)
 
-    async def enemy_attack(self, ctx: ComponentContext, player_id: int, enemy):
-        # Fetch player stats
-        player_stats = await self.db.fetchrow("""
-            SELECT * FROM player_data WHERE playerid = $1
-        """, player_id)
+    async def enemy_attack(self, ctx: ComponentContext, player_id, enemy, player_stats, enemy_health):
+        # Enemy's attack logic
+        enemy_attack_roll = self.roll_dice() + enemy['dexterity']
+        player_attributes = self.extract_attributes(player_stats)
 
-        # Roll for enemy's attack
-        enemy_attack_roll = self.roll_dice() + enemy['strength']
-        if enemy_attack_roll > 10 + player_stats['agility']:  # Hit success based on strength vs agility
+        if enemy_attack_roll > 10 + player_attributes['agility']:  # Hit success based on dexterity vs agility
             # Check if player blocks the attack
             if random.randint(1, 100) <= player_stats.get('block_chance', 0):
                 await ctx.send(f"You blocked {enemy['name']}'s attack!", ephemeral=True)
             else:
-                damage_received = max(0, enemy['strength'] - player_stats['physical_resistance'])
-                player_stats['health'] -= damage_received
+                resistance = player_stats.get('physical_resistance', 0)
+                damage_received = max(0, enemy['strength'] - resistance)
+                player_stats['health'] -= damage_received  # Update player's health
+
                 await ctx.send(f"{enemy['name']} dealt {damage_received} damage to you. Remaining player health: {player_stats['health']}", ephemeral=True)
 
-        # Check if the player is defeated
+        # Check if player is defeated
         if player_stats['health'] <= 0:
             await ctx.send(f"You have been defeated by {enemy['name']}!", ephemeral=True)
+        else:
+            # Prompt player for the next action if they are still alive
+            await self.prompt_player_action(ctx, player_id, player_stats['health'], enemy, enemy_health, player_attributes, self.extract_attributes(enemy), self.extract_resistances(player_stats), self.extract_resistances(enemy))
 
     @staticmethod
     def extract_resistances(entity):
@@ -181,7 +187,7 @@ class BattleSystem(Extension):
             'air_resistance': entity.get('air_resistance', 0),
             'sleep_resistance': entity.get('sleep_resistance', 0),
             'block_chance': entity.get('block_chance', 0),
-            'corrosive_resistance': entity.get('corrosive_resistance', 0)  # New corrosive resistance
+            'corrosive_resistance': entity.get('corrosive_resistance', 0)
         }
 
     @staticmethod
@@ -197,16 +203,16 @@ class BattleSystem(Extension):
             'charisma': entity.get('charisma', 0),
             'willpower': entity.get('willpower', 0),
             'luck': entity.get('luck', 0),
-            'corrosive_damage': entity.get('corrosive_damage', 0)  # New corrosive damage attribute
+            'corrosive_damage': entity.get('corrosive_damage', 0)
         }
 
-    async def handle_enemy_defeat(self, ctx: SlashContext, player_id: int, enemyid: int):
+    async def handle_enemy_defeat(self, ctx: SlashContext, player_id: int, enemy_id: int):
         # Fetch drop chances for this enemy
         drop_list = await self.db.fetch("""
             SELECT edc.item_id, edc.drop_chance
             FROM enemy_drop_chances edc
             WHERE edc.enemyid = $1
-        """, enemyid)
+        """, enemy_id)
 
         if not drop_list:
             await ctx.send("No loot available from this enemy.", ephemeral=True)
