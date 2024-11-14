@@ -39,7 +39,8 @@ class MiningModule(Extension):
             return
 
         # Check if the player has the correct pickaxe equipped
-        pickaxe_type_required = ore['axetype']
+        pickaxe_type_required = ore['pickaxetype']
+
         equipped_pickaxe = await self.db.fetchrow("""
             SELECT i.itemid, i.name, i.type
             FROM inventory inv
