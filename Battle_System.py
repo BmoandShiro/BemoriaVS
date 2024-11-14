@@ -179,15 +179,10 @@ class BattleSystem(Extension):
 
         # Calculate ability effect for each damage type
         total_damage = 0
-        for damage_type in ['physical', 'fire', 'ice', 'lightning', 'poison', 'magic', 'crushing', 'piercing', 'water', 'earth', 'light', 'dark', 'air']:
-            damage = ability[f'{damage_type}_damage'] + player_attributes.get(ability['scaling_attribute'], 0)
-            resistance_percentage = enemy_resistances.get(f'{damage_type}_resistance', 0)
-
-            # Calculate the resistance multiplier based on the percentage
-            multiplier = 1 - (resistance_percentage / 100)
-
-            # Apply the multiplier to the damage
-            damage_after_resistance = max(0, damage * multiplier)
+        for damage_type in ['physical', 'fire', 'ice', 'lightning', 'poison', 'magic', 'crushing', 'piercing', 'water', 'earth', 'light', 'dark', 'air', 'corrosive']:
+            damage = ability.get(f'{damage_type}_damage', 0) + player_attributes.get(ability.get('scaling_attribute', ''), 0)
+            resistance = enemy_resistances.get(f'{damage_type}_resistance', 0)
+            damage_after_resistance = max(0, damage * (1 - resistance / 100.0))  # Updated to use percentage
             total_damage += damage_after_resistance
 
         # Check if enemy blocks the ability
@@ -202,9 +197,10 @@ class BattleSystem(Extension):
         player_attributes['mana'] -= ability['mana_cost']
 
 
+
     @staticmethod
     def extract_resistances(entity):
-        """Extract resistances from an entity (player or enemy) as percentages."""
+        """Extract resistances from an entity (player or enemy)."""
         return {
             'fire_resistance': entity.get('fire_resistance', 0),
             'ice_resistance': entity.get('ice_resistance', 0),
@@ -220,8 +216,10 @@ class BattleSystem(Extension):
             'dark_resistance': entity.get('dark_resistance', 0),
             'air_resistance': entity.get('air_resistance', 0),
             'sleep_resistance': entity.get('sleep_resistance', 0),
-            'block_chance': entity.get('block_chance', 0)
+            'block_chance': entity.get('block_chance', 0),
+            'corrosive_resistance': entity.get('corrosive_resistance', 0)  # New corrosive resistance
         }
+
 
 
     @staticmethod
@@ -236,8 +234,11 @@ class BattleSystem(Extension):
             'endurance': entity.get('endurance', 0),
             'charisma': entity.get('charisma', 0),
             'willpower': entity.get('willpower', 0),
-            'luck': entity.get('luck', 0)
+            'luck': entity.get('luck', 0),
+            'corrosive_damage': entity.get('corrosive_damage', 0)  # New corrosive damage attribute
         }
+
+        
 
     async def handle_enemy_defeat(self, ctx: SlashContext, player_id: int, enemy_id: int):
         # Fetch drop chances for this enemy
