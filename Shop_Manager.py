@@ -286,11 +286,15 @@ class ShopManager(Extension):
             "very rare": 1.5, 
             "legendary": 2.0
         }
-        location_multiplier = self.shops.get(location, {}).get("sell_multiplier", 1.0)
+
+        # Commenting out the location multiplier for now
+        # location_multiplier = self.shops.get(location, {}).get("sell_multiplier", 1.0)
+        location_multiplier = 1.0  # Default multiplier for now
 
         # Base value modified by length and weight, then adjusted by rarity and location
         value = (base_value * length * weight) * rarity_multiplier.get(rarity.lower(), 1.0) * location_multiplier
         return value
+
 
     async def _deduct_gold(self, player_id, amount):
         # Deduct the gold from the player's balance in the DB
