@@ -98,9 +98,14 @@ class BattleSystem(Extension):
         await ctx.defer(ephemeral=True)  # Acknowledge the interaction
 
         # Fetch player and enemy data
-        player_stats = await self.db.fetch_player_details(player_id)
+        player_stats = await self.db.fetchrow("""
+            SELECT health, dexterity, strength, agility, attack_power
+            FROM player_data
+            WHERE playerid = $1
+        """, player_id)
+
         enemy = await self.db.fetchrow("""
-            SELECT enemyid, name, health, agility, attack_power, physical_resistance
+            SELECT enemyid, name, health, agility, dexterity, attack_power, physical_resistance
             FROM enemies WHERE enemyid = $1
         """, enemyid)
 
@@ -109,14 +114,14 @@ class BattleSystem(Extension):
             return
 
         # Player attack logic
-        player_attack_roll = self.roll_dice() + player_stats['dexterity']
+        player_attack_roll = self.roll_dice() + player_stats.get('dexterity', 0)
         critical_hit = False
 
-        if player_attack_roll - player_stats['dexterity'] == 20 or player_attack_roll >= 2 * (10 + enemy['agility']):
+        if player_attack_roll - player_stats.get('dexterity', 0) == 20 or player_attack_roll >= 2 * (10 + enemy.get('agility', 0)):
             critical_hit = True
 
-        if player_attack_roll > 10 + enemy['agility']:
-            base_damage = player_stats['strength'] + player_stats.get('attack_power', 0)
+        if player_attack_roll > 10 + enemy.get('agility', 0):
+            base_damage = player_stats.get('strength', 0) + player_stats.get('attack_power', 0)
             resistance_percentage = enemy.get('physical_resistance', 0)
             multiplier = 1 - (resistance_percentage / 100)
             damage_dealt = max(0, base_damage * multiplier)
@@ -124,7 +129,7 @@ class BattleSystem(Extension):
             if critical_hit:
                 damage_dealt *= 1.5  # Critical hits deal 1.5x damage
 
-            enemy_health -= damage_dealt
+            enemy_health = enemy['health'] - damage_dealt
 
             await ctx.send(f"You dealt {damage_dealt} damage to {enemy['name']}. Remaining enemy health: {enemy_health}", ephemeral=True)
 
