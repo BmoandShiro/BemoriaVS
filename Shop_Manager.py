@@ -7,19 +7,37 @@ class ShopManager(Extension):
         self.bot = bot
         self.db = bot.db  # Consistent with InventorySystem
 
-        # Define shops with their inventory, location, and availability criteria
-        self.shops = {
-            "Dave's Fishery": {
-                "location": "Dave Fishery",
-                "inventory": [
-                    {"name": "Ocean Rod", "type": "Tool", "price": 7500, "rod_type": "Deep"},
-                ],
-                "requirements": {
-                    "quest_completed": 2  # Quest ID required to unlock shop
-                },
-                "sell_multiplier": 1.25  # Multiplier for selling fish here
-            }
-        }
+    async def load_shops(self):
+        # Fetch all shop locations and details from the database
+        shop_details = await self.db.fetch("""
+            SELECT s.shop_id, s.shop_location, s.itemid, s.quantity, s.price, i.name, i.type
+            FROM shop_items s
+            JOIN items i ON s.itemid = i.itemid
+        """)
+
+        # Organize shop details into a dictionary similar to self.shops
+        shops = {}
+        for record in shop_details:
+            location = record["shop_location"]
+
+            # If this location is not yet in the dictionary, initialize it
+            if location not in shops:
+                shops[location] = {
+                    "location": location,
+                    "inventory": [],
+                    "sell_multiplier": 1.0,  # Default sell multiplier
+                    "requirements": {}  # Placeholder for requirements
+                }
+            
+            # Append the item details to the shop's inventory
+            shops[location]["inventory"].append({
+                "name": record["name"],
+                "type": record["type"],
+                "price": record["price"],
+                "quantity": record["quantity"]
+            })
+
+        return shops
 
    
 
@@ -225,10 +243,15 @@ class ShopManager(Extension):
         """, amount, player_id)
         
     async def get_shop_items(self, location):
-        # Fetch the inventory items for the given location
-        if location in self.shops:
-            return self.shops[location]["inventory"]
-        return []
+        # Fetch shop items for the given location from the database
+        shop_items = await self.db.fetch("""
+            SELECT i.name, s.price, i.type, s.quantity
+            FROM shop_items s
+            JOIN items i ON s.itemid = i.itemid
+            WHERE s.shop_location = $1
+        """, str(location))
+
+        return shop_items
     
     def _calculate_fish_value(self, base_value, length, weight, rarity, location):
         # Ensure all values are of type float
