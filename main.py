@@ -18,6 +18,10 @@ from Fishing import FishingModule
 from Shop_Manager import ShopManager
 from Woodcutting import WoodcuttingModule, setup as woodcutting_setup 
 import os
+from Mining import setup as mining_setup
+
+
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -61,6 +65,9 @@ bot.fishing_module = FishingModule(bot)
 
 shop_manager = ShopManager(bot)
 bot.shop_manager = shop_manager
+
+mining_setup(bot)
+
 
 
 async def patched_send(ctx, *args, **kwargs):
