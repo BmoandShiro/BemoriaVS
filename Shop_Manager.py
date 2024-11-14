@@ -42,15 +42,35 @@ class ShopManager(Extension):
    
 
     async def handle_shop(self, ctx, player_data):
-        location = player_data['current_location']
-        shop_items = await self.get_shop_items(location)
+        # Ensure you get the current location ID from player's data
+        if 'current_location' not in player_data:
+            await ctx.send("Error: Player's current location not found.", ephemeral=True)
+            return
+
+        location_id = player_data['current_location']
+
+        # Fetch the actual location name from the locations table using the location_id
+        location_data = await self.db.fetchrow("""
+            SELECT name
+            FROM locations
+            WHERE locationid = $1
+        """, location_id)
+
+        if not location_data:
+            await ctx.send("Error: Unable to retrieve location details for the provided location ID.", ephemeral=True)
+            return
+
+        location_name = location_data["name"]
+
+        # Fetch shop items for the location
+        shop_items = await self.get_shop_items(location_name)
 
         # Log to check if shop items are retrieved properly
-        logging.info(f"Shop items for {location}: {shop_items}")
+        logging.info(f"Shop items for {location_name}: {shop_items}")
 
         # Create an embed to display shop items
         shop_embed = Embed(
-            title=f"{location} Shop",
+            title=f"{location_name} Shop",
             description="Items available for purchase:" if shop_items else "No items available for purchase",
             color=0xFFD700  # Gold color for the shop interface
         )
@@ -88,6 +108,7 @@ class ShopManager(Extension):
             await ctx.send(embeds=[shop_embed], components=components, ephemeral=True)
         except Exception as e:
             logging.error(f"Failed to send shop message: {e}")
+
 
 
     @component_callback("sell_fish")
