@@ -231,11 +231,16 @@ class Database:
     
 
     async def get_current_inventory_count(self, player_id):
-        """Get the current number of different items in the player's inventory."""
+        """Get the current number of different items in the player's inventory excluding equipped items."""
         return await self.fetchval(
-            "SELECT COUNT(*) FROM inventory WHERE playerid = $1;",
+            """
+            SELECT COUNT(*)
+            FROM inventory
+            WHERE playerid = $1 AND isequipped = FALSE AND in_bank = FALSE;
+            """,
             player_id
         )
+
 
     async def can_add_to_inventory(self, player_id, items_to_add=1):
         """Check if the player can add new items to their inventory without exceeding capacity."""
