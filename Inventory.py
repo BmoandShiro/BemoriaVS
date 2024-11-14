@@ -103,6 +103,23 @@ class Inventory:
         item_info = await self.db.fetchrow("SELECT * FROM items WHERE itemid = $1", item_id)
         if not item_info:
             return "Item not found."
+        
+         # If the item is a fishing rod, make sure no other rod is equipped
+        if item_info['type'] == "Tool" and item_info['rodtype']:
+            # Check if the player already has a rod equipped
+            equipped_rod = await self.db.fetchrow("""
+                SELECT inventoryid FROM inventory
+                WHERE playerid = $1 AND isequipped = true AND itemid IN (
+                    SELECT itemid FROM items WHERE type = 'Tool' AND rodtype IS NOT NULL
+                )
+            """, self.player_id)
+
+            # If a rod is equipped, unequip it first
+            if equipped_rod:
+                await self.db.execute("""
+                    UPDATE inventory SET isequipped = false, slot = NULL
+                    WHERE inventoryid = $1
+                """, equipped_rod["inventoryid"])
 
         slot = None
         if item_info['type'] == "Helmet":
