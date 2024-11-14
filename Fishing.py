@@ -53,15 +53,15 @@ class FishingModule:
     def roll_for_rarity(self, player_xp):
         # Define rarity distribution with possible multiplicative modifiers
         base_rarity_distribution = {
-            "common": 50,
+            "common": 51,
             "uncommon": 25,
             "rare": 15,
             "very_rare": 8,
-            "legendary": 2  # Very low probability for legendary items
+            "legendary": 1  # Very low probability for legendary items
         }
 
         # Modify distribution based on player's fishing skill level
-        if player_xp > 50:
+        if player_xp > 300000:
             base_rarity_distribution["rare"] += 3
             base_rarity_distribution["uncommon"] += 2
             base_rarity_distribution["common"] -= 2
