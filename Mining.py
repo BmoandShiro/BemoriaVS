@@ -31,30 +31,47 @@ class MiningModule(Extension):
     async def start_mining_action(self, ctx: ComponentContext, player_id: int, location_id: int):
         # Fetch an ore deposit based on the current location
         ore = await self.db.fetchrow("""
-            SELECT * FROM ores WHERE locationid = $1 ORDER BY RANDOM() LIMIT 1
+            SELECT o.*, mt.tier_level AS ore_tier
+            FROM ores o
+            JOIN material_tiers mt ON o.oretype = mt.material_name
+            WHERE o.locationid = $1
+            ORDER BY RANDOM() LIMIT 1
         """, location_id)
 
         if not ore:
             await ctx.send("No ore deposits to mine here.", ephemeral=True)
             return
 
-        # Check if the player has the correct pickaxe equipped
-        pickaxe_type_required = ore['pickaxetype']
-
+        # Check if the player has an equipped pickaxe
         equipped_pickaxe = await self.db.fetchrow("""
-            SELECT i.itemid, i.name, i.type
+            SELECT i.itemid, i.name, i.pickaxetype
             FROM inventory inv
             JOIN items i ON inv.itemid = i.itemid
             WHERE inv.playerid = $1 AND inv.isequipped = TRUE AND i.pickaxe = TRUE
         """, player_id)
 
-
         if not equipped_pickaxe:
             await ctx.send("You need to equip a pickaxe to mine ores.", ephemeral=True)
             return
 
-        if equipped_pickaxe['type'].lower() != pickaxe_type_required.lower():
-            await ctx.send(f"You need a {pickaxe_type_required} pickaxe to mine this type of ore.", ephemeral=True)
+        # Fetch the pickaxe tier level from the material_tiers table using the pickaxetype
+        pickaxe_type = equipped_pickaxe['pickaxetype']
+        pickaxe_tier_info = await self.db.fetchrow("""
+            SELECT tier_level
+            FROM material_tiers
+            WHERE material_name = $1
+        """, pickaxe_type)
+
+        if not pickaxe_tier_info:
+            await ctx.send("Error: Unable to determine the tier level of your pickaxe.", ephemeral=True)
+            return
+
+        pickaxe_tier = pickaxe_tier_info['tier_level']
+        ore_tier = ore['ore_tier']
+
+        # Compare the pickaxe's tier level with the ore's tier level, allowing one tier lower to mine
+        if pickaxe_tier < (ore_tier - 1):
+            await ctx.send(f"Your pickaxe is not strong enough to mine this type of ore. You need a pickaxe of at least tier {ore_tier - 1}.", ephemeral=True)
             return
 
         # Add ore item to inventory using itemid from ore table
@@ -85,6 +102,8 @@ class MiningModule(Extension):
         # Send a detailed message about what was added, including XP gained
         item_name = item_details['name']
         await ctx.send(f"Added {number_of_ores}x {item_name} to your inventory. You gained {xp_gained} XP in Mining.", ephemeral=True)
+
+
 
 
 # Setup function to load this as an extension
