@@ -289,7 +289,7 @@ class BattleSystem(Extension):
                     ON CONFLICT (playerid, itemid) DO UPDATE SET quantity = inventory.quantity + $3
                 """, player_id, itemid, quantity)
 
-                await ctx.send(f"** {quantity}  {item['name']}!** Added to your inventory.", ephemeral=True)
+                await ctx.send(f"x** {quantity}  {item['name']}!** Added to your inventory.", ephemeral=True)
 
 
             
