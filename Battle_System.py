@@ -260,14 +260,14 @@ class BattleSystem(Extension):
             
     @component_callback(re.compile(r"^ability_\d+_\d+$"))
     async def ability_button_handler(self, ctx: ComponentContext):
-        # Extract player ID and enemy ID from the custom ID
         try:
+            # Extract player ID and enemy ID from the custom ID
             parts = ctx.custom_id.split("_")
             if len(parts) != 3:
                 await ctx.send("Error: Invalid button ID format.", ephemeral=True)
                 return
 
-            # Parse player ID and enemy ID from the button's custom ID
+            # Parse player ID and enemy ID
             button_player_id = int(parts[1])
             enemy_id = int(parts[2])
 
@@ -297,9 +297,9 @@ class BattleSystem(Extension):
             # Proceed with ability logic if authorized
             await ctx.defer(ephemeral=True)  # Acknowledge the interaction
 
-            # Fetch the player's abilities from `player_abilities` linked with `abilities`
+            # Fetch the player's equipped ability from `player_abilities` linked with `abilities`
             player_ability = await self.db.fetchrow("""
-                SELECT pa.*, a.* 
+                SELECT pa.*, a.*
                 FROM player_abilities pa
                 JOIN abilities a ON pa.ability_id = a.ability_id
                 WHERE pa.playerid = $1 AND pa.is_equipped = TRUE
@@ -346,12 +346,64 @@ class BattleSystem(Extension):
             else:
                 await ctx.send(f"You used {player_ability['name']} but it had no effect on {enemy['name']}.", ephemeral=True)
 
+            # Check if either the enemy or player has reached zero health
+            await self.handle_combat_end(ctx, actual_player_id, enemy)
+
+            # Enemy's turn to attack
+            await self.enemy_attack(ctx, actual_player_id, enemy)
+
+            # Check if either the enemy or player has reached zero health again after the enemy attack
+            await self.handle_combat_end(ctx, actual_player_id, enemy)
+
         except (ValueError, IndexError) as e:
             # Handle any parsing issues
             print(f"[Error] Failed to parse button interaction: {e}")
             await ctx.send("Error: Could not process button interaction.", ephemeral=True)
 
+    async def handle_combat_end(self, ctx, player_id, enemy):
+        """Handles the ending of combat when either the player or enemy reaches zero health."""
+        # Fetch updated player and enemy health
+        player_stats = await self.db.fetchrow("""
+            SELECT * FROM player_data WHERE playerid = $1
+        """, player_id)
 
+        player_health = player_stats['health']
+        enemy_health = enemy['health']
+
+        # If both are nearing zero, determine by agility who strikes first
+        if player_health <= 0 and enemy_health <= 0:
+            player_agility = player_stats['agility']
+            enemy_agility = enemy['agility']
+
+            if player_agility > enemy_agility:
+                # Player wins because they are faster
+                await ctx.send(f"You defeated {enemy['name']} before they could strike!", ephemeral=True)
+                await self.handle_enemy_defeat(ctx, player_id, enemy['enemyid'])
+            else:
+                # Enemy wins because they are faster
+                await ctx.send(f"{enemy['name']} defeated you before you could strike!", ephemeral=True)
+                # Update player's health to zero in the database
+                await self.db.execute("""
+                    UPDATE player_data
+                    SET health = $1
+                    WHERE playerid = $2
+                """, 0, player_id)
+            return
+
+        # Handle case if only the enemy is defeated
+        if enemy_health <= 0:
+            await ctx.send(f"{enemy['name']} has been defeated!", ephemeral=True)
+            await self.handle_enemy_defeat(ctx, player_id, enemy['enemyid'])
+
+        # Handle case if only the player is defeated
+        elif player_health <= 0:
+            await ctx.send("You have been defeated!", ephemeral=True)
+            # Update player's health to zero in the database
+            await self.db.execute("""
+                UPDATE player_data
+                SET health = $1
+                WHERE playerid = $2
+            """, 0, player_id)
 
 
 
