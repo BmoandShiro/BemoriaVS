@@ -49,6 +49,7 @@ class BattleSystem(Extension):
             color=0xFF0000  # Red color for battle
         )
 
+        # Use `player_id` (internal ID) instead of `ctx.author.id` for consistency
         attack_button = Button(
             style=ButtonStyle.PRIMARY,
             label="Attack",
@@ -63,6 +64,7 @@ class BattleSystem(Extension):
         components = [[attack_button, ability_button]]
 
         await ctx.send(embeds=[embed], components=components, ephemeral=True)
+
 
     # New function for initiating a hunt
     async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
@@ -255,6 +257,143 @@ class BattleSystem(Extension):
                 """, player_id, item_id)
                 await ctx.send(f"**You have received an item!** Check your inventory for item ID: {item_id}.", ephemeral=True)
                 return
+            
+    @component_callback(re.compile(r"^ability_\d+_\d+$"))
+    async def ability_button_handler(self, ctx: ComponentContext):
+        # Extract player ID and enemy ID from the custom ID
+        try:
+            parts = ctx.custom_id.split("_")
+            if len(parts) != 3:
+                await ctx.send("Error: Invalid button ID format.", ephemeral=True)
+                return
+
+            # Parse player ID and enemy ID from the button's custom ID
+            button_player_id = int(parts[1])
+            enemy_id = int(parts[2])
+
+            # Debugging information to verify what's happening
+            print(f"[Debug] Custom ID: {ctx.custom_id}")
+            print(f"[Debug] Player ID from button: {button_player_id}, Author Discord ID: {ctx.author.id}")
+
+            # Fetch the player's data using the Discord ID to verify identity
+            player_data = await self.db.fetchrow("""
+                SELECT playerid FROM players
+                WHERE discord_id = $1
+            """, ctx.author.id)
+
+            if not player_data:
+                await ctx.send("Error: Player not found.", ephemeral=True)
+                return
+
+            # Extract the actual player ID from the database
+            actual_player_id = player_data['playerid']
+
+            # Compare player ID from the button with the actual player ID retrieved from the database
+            if button_player_id != actual_player_id:
+                print("[Debug] Authorization failed - Player IDs do not match.")
+                await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+                return
+
+            # Proceed with ability logic if authorized
+            await ctx.defer(ephemeral=True)  # Acknowledge the interaction
+
+            # Fetch the player's abilities from `player_abilities` linked with `abilities`
+            player_ability = await self.db.fetchrow("""
+                SELECT pa.*, a.* 
+                FROM player_abilities pa
+                JOIN abilities a ON pa.ability_id = a.ability_id
+                WHERE pa.playerid = $1 AND pa.is_equipped = TRUE
+            """, actual_player_id)
+
+            if not player_ability:
+                await ctx.send("You have no equipped abilities to use.", ephemeral=True)
+                return
+
+            # Fetch the enemy details
+            enemy = await self.db.fetchrow("""
+                SELECT * FROM enemies
+                WHERE enemyid = $1
+            """, enemy_id)
+
+            if not enemy:
+                await ctx.send("Error: Unable to retrieve enemy data.", ephemeral=True)
+                return
+
+            # Calculate ability effect
+            total_damage = 0
+            scaling_attribute = player_ability['scaling_attribute']
+            scaling_value = player_data.get(scaling_attribute, 0)
+
+            for damage_type in ['physical', 'fire', 'ice', 'lightning', 'poison', 'magic', 'crushing', 'piercing', 'water', 'earth', 'light', 'dark', 'air', 'corrosive']:
+                damage = player_ability.get(f'{damage_type}_damage', 0) + scaling_value
+                resistance = enemy.get(f'{damage_type}_resistance', 0)
+                damage_after_resistance = max(0, damage * (1 - resistance / 100.0))
+                total_damage += damage_after_resistance
+
+            # Apply total damage to enemy
+            enemy_health = enemy['health'] - total_damage
+            enemy_health = max(0, enemy_health)  # Ensure health doesn't go negative
+
+            # Update the enemy's health in the database
+            await self.db.execute("""
+                UPDATE enemies SET health = $1
+                WHERE enemyid = $2
+            """, enemy_health, enemy_id)
+
+            # Send the result message
+            if total_damage > 0:
+                await ctx.send(f"You used {player_ability['name']} and dealt {total_damage} damage to {enemy['name']}. Remaining enemy health: {enemy_health}", ephemeral=True)
+            else:
+                await ctx.send(f"You used {player_ability['name']} but it had no effect on {enemy['name']}.", ephemeral=True)
+
+        except (ValueError, IndexError) as e:
+            # Handle any parsing issues
+            print(f"[Error] Failed to parse button interaction: {e}")
+            await ctx.send("Error: Could not process button interaction.", ephemeral=True)
+
+
+
+
+
+
+
+
+    async def use_ability(self, ctx, player_id, player_stats, enemy):
+        # Logic for handling ability usage
+        abilities = await self.db.fetch("""
+            SELECT * FROM abilities WHERE player_id = $1
+        """, player_id)
+
+        if not abilities:
+            await ctx.send("You have no abilities to use.", ephemeral=True)
+            return
+
+        # For now, pick the first ability
+        ability = abilities[0]
+
+        total_damage = 0
+        scaling_attribute = ability['scaling_attribute']
+        scaling_value = player_stats.get(scaling_attribute, 0)
+
+        for damage_type in ['physical', 'fire', 'ice', 'lightning', 'poison', 'magic', 'crushing', 'piercing', 'water', 'earth', 'light', 'dark', 'air', 'corrosive']:
+            damage = ability.get(f'{damage_type}_damage', 0) + scaling_value
+            resistance = enemy.get(f'{damage_type}_resistance', 0)
+            damage_after_resistance = max(0, damage * (1 - resistance / 100.0))
+            total_damage += damage_after_resistance
+
+        enemy_health = max(0, enemy['health'] - total_damage)
+
+        # Update the enemy's health in the database
+        await self.db.execute("""
+            UPDATE enemies SET health = $1
+            WHERE enemyid = $2
+        """, enemy_health, enemy['enemyid'])
+
+        if total_damage > 0:
+            await ctx.send(f"You used {ability['name']} and dealt {total_damage} damage to {enemy['name']}. Remaining enemy health: {enemy_health}", ephemeral=True)
+        else:
+            await ctx.send(f"You used {ability['name']} but it had no effect on {enemy['name']}.", ephemeral=True)
+
 
 # Setup function to load this as an extension
 def setup(bot):
