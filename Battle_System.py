@@ -357,17 +357,22 @@ class BattleSystem(Extension):
     @component_callback(re.compile(r"^cast_ability_\d+_\d+_\d+$"))
     async def cast_ability_handler(self, ctx: ComponentContext):
         try:
-            # Extract player ID, enemy ID, and ability ID from the custom ID
+            # Corrected version for handling the custom ID
             parts = ctx.custom_id.split("_")
-            if len(parts) != 4:
+            if len(parts) != 5 or parts[0] != "cast" or parts[1] != "ability":
                 await ctx.send("Error: Invalid button ID format.", ephemeral=True)
                 return
 
             # Parse player ID, enemy ID, and ability ID
-            player_id = int(parts[1])
-            enemy_id = int(parts[2])
-            ability_id = int(parts[3])
+            player_id = int(parts[2])
+            enemy_id = int(parts[3])
+            ability_id = int(parts[4])
 
+
+            # Debugging to verify what's happening
+            print(f"[Debug] Custom ID: {ctx.custom_id}")
+    
+            print(f"[Debug] Parsed IDs -> Player ID: {player_id}, Enemy ID: {enemy_id}, Ability ID: {ability_id}")
             # Fetch player data using the Discord ID to verify identity
             player_data = await self.db.fetchrow("""
                 SELECT playerid FROM players
@@ -385,6 +390,9 @@ class BattleSystem(Extension):
             if player_id != actual_player_id:
                 await ctx.send("You are not authorized to use this ability.", ephemeral=True)
                 return
+
+            # Proceed if authorized
+            await ctx.defer(ephemeral=True)
 
             # Fetch the chosen ability
             player_ability = await self.db.fetchrow("""
@@ -444,6 +452,7 @@ class BattleSystem(Extension):
             # Handle any parsing issues
             print(f"[Error] Failed to parse ability casting interaction: {e}")
             await ctx.send("Error: Could not process ability interaction.", ephemeral=True)
+
 
         
 
