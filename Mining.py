@@ -45,8 +45,9 @@ class MiningModule(Extension):
             SELECT i.itemid, i.name, i.type
             FROM inventory inv
             JOIN items i ON inv.itemid = i.itemid
-            WHERE inv.playerid = $1 AND inv.isequipped = TRUE AND i.type = 'Pickaxe'
+            WHERE inv.playerid = $1 AND inv.isequipped = TRUE AND i.pickaxe = TRUE
         """, player_id)
+
 
         if not equipped_pickaxe:
             await ctx.send("You need to equip a pickaxe to mine ores.", ephemeral=True)
