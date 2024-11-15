@@ -201,12 +201,17 @@ class FishingModule:
         Get the equipped fishing tool and return its rod type.
         """
         tool = await self.db.fetchrow("""
-            SELECT it.rodtype FROM inventory inv
+            SELECT it.rodtype, it.name, it.fishingrod, inv.isequipped FROM inventory inv
             JOIN items it ON inv.itemid = it.itemid
-            WHERE inv.playerid = $1 AND inv.isequipped = true AND it.type = 'Tool'
+            WHERE inv.playerid = $1 AND inv.isequipped = TRUE AND it.fishingrod = TRUE
         """, player_id)
 
+        print(f"[Debug] Equipped tool data: {tool}")  # Debugging output
+    
         return tool['rodtype'] if tool else None
+
+
+
             
 
     
