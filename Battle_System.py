@@ -259,6 +259,7 @@ class BattleSystem(Extension):
         # Determine which items are dropped
         await self.roll_for_loot(ctx, player_id, drop_list)
 
+
     async def roll_for_loot(self, ctx, player_id, drop_list):
         for drop in drop_list:
             if random.uniform(0, 100) <= drop['droprate']:
@@ -272,7 +273,7 @@ class BattleSystem(Extension):
                     await ctx.send("You don't have enough space in your inventory for the loot.", ephemeral=True)
                     return
 
-                # Add the item to inventory
+                # Add the item to inventory with proper conflict handling
                 await self.db.execute("""
                     INSERT INTO inventory (playerid, itemid, quantity, isequipped)
                     VALUES ($1, $2, $3, false)
@@ -280,6 +281,7 @@ class BattleSystem(Extension):
                 """, player_id, itemid, quantity)
 
                 await ctx.send(f"**You have received {quantity} of item ID: {itemid}!** Check your inventory.", ephemeral=True)
+
             
     @component_callback(re.compile(r"^ability_\d+_\d+$"))
     async def ability_button_handler(self, ctx: ComponentContext):
@@ -467,35 +469,17 @@ class BattleSystem(Extension):
         """, player_id)
 
         player_health = player_stats['health']
-        enemy_health = enemy['health']
+        enemy_health = self.active_battles[player_id]['enemy_health']
 
-        # If both are nearing zero, determine by agility who strikes first
-        if player_health <= 0 and enemy_health <= 0:
-            player_agility = player_stats['agility']
-            enemy_agility = enemy['agility']
-
-            if player_agility > enemy_agility:
-                # Player wins because they are faster
-                await ctx.send(f"You defeated {enemy['name']} before they could strike!", ephemeral=True)
-                await self.handle_enemy_defeat(ctx, player_id, enemy['enemyid'])
-            else:
-                # Enemy wins because they are faster
-                await ctx.send(f"{enemy['name']} defeated you before you could strike!", ephemeral=True)
-                # Update player's health to zero in the database
-                await self.db.execute("""
-                    UPDATE player_data
-                    SET health = $1
-                    WHERE playerid = $2
-                """, 0, player_id)
-            return
-
-        # Handle case if only the enemy is defeated
+        # Handle case if the enemy is defeated
         if enemy_health <= 0:
             await ctx.send(f"{enemy['name']} has been defeated!", ephemeral=True)
             await self.handle_enemy_defeat(ctx, player_id, enemy['enemyid'])
+            del self.active_battles[player_id]  # Remove the battle as it's over
+            return
 
-        # Handle case if only the player is defeated
-        elif player_health <= 0:
+        # Handle case if the player is defeated
+        if player_health <= 0:
             await ctx.send("You have been defeated!", ephemeral=True)
             # Update player's health to zero in the database
             await self.db.execute("""
@@ -503,6 +487,8 @@ class BattleSystem(Extension):
                 SET health = $1
                 WHERE playerid = $2
             """, 0, player_id)
+            del self.active_battles[player_id]  # Remove the battle as it's over
+
 
 
 
