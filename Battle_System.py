@@ -273,14 +273,24 @@ class BattleSystem(Extension):
                     await ctx.send("You don't have enough space in your inventory for the loot.", ephemeral=True)
                     return
 
-                # Add the item to inventory with proper conflict handling
+                # Fetch the item name from the items table
+                item = await self.db.fetchrow("""
+                    SELECT name FROM items WHERE itemid = $1
+                """, itemid)
+
+                if not item:
+                    await ctx.send("Error: Unable to retrieve item data.", ephemeral=True)
+                    return
+
+                # Add the item to inventory
                 await self.db.execute("""
                     INSERT INTO inventory (playerid, itemid, quantity, isequipped)
                     VALUES ($1, $2, $3, false)
                     ON CONFLICT (playerid, itemid) DO UPDATE SET quantity = inventory.quantity + $3
                 """, player_id, itemid, quantity)
 
-                await ctx.send(f"**You have received {quantity} of item ID: {itemid}!** Check your inventory.", ephemeral=True)
+                await ctx.send(f"** {quantity}  {item['name']}!** Added to your inventory.", ephemeral=True)
+
 
             
     @component_callback(re.compile(r"^ability_\d+_\d+$"))
