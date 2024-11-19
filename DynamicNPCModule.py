@@ -57,7 +57,7 @@ class DynamicNPCModule(Extension):
 
 
     async def send_dialogue(self, ctx, dialog, player_id):
-        embed = Embed(title=dialog['dialogue_title'], description=dialog['dialogue_text'], color=0x00FF00)
+        embed = Embed(title="NPC Interaction", description=dialog['dialog_text'], color=0x00FF00)
 
         # Fetch available responses for the player
         responses = await self.db.fetch(
