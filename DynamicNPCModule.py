@@ -25,7 +25,7 @@ class DynamicNPCModule(Extension):
             # Extract the NPC ID and the original user ID from the custom ID
             npc_id = int(ctx.custom_id.split("_")[2])
             original_user_id = int(ctx.custom_id.split("_")[3])
-
+    
             # Ensure that only the original player can proceed
             if ctx.author.id != original_user_id:
                 await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
@@ -41,7 +41,7 @@ class DynamicNPCModule(Extension):
                 WHERE dynamic_npc_id = $1
                 """, npc_id
             )
-
+    
             if not npc_data:
                 await ctx.send("Unable to find NPC information.", ephemeral=True)
                 return
@@ -65,25 +65,20 @@ class DynamicNPCModule(Extension):
             embed = Embed(title=npc_name, description=dialog['dialog_text'], color=0x00FF00)
             components = []
 
-            # Fetch the available quest for the NPC from the `quests` table
+            # Fetch the available quest for the NPC - make sure to pull the correct quest ID
             quest = await self.db.fetchrow(
                 """
-                SELECT quest_id, name AS quest_name
-                FROM quests
+                SELECT * FROM quests
                 WHERE npc_id = $1
-                LIMIT 1
                 """, npc_id
             )
 
             # If a quest is available, add a button to accept it
             if quest:
-                quest_name = quest['quest_name']
-                quest_id = quest['quest_id']
-
                 quest_button = Button(
                     style=ButtonStyle.PRIMARY,
-                    label=f"Accept Quest: {quest_name}",
-                    custom_id=f"accept_quest|{quest_id}|{player_id}"
+                    label=f"Accept Quest: {quest['name']}",
+                    custom_id=f"accept_quest|{quest['quest_id']}|{player_id}"
                 )
                 components.append(quest_button)
 
@@ -92,6 +87,7 @@ class DynamicNPCModule(Extension):
         except Exception as e:
             logging.error(f"Error in npc_dialog_handler: {e}")
             await ctx.send("An error occurred. Please try again later.", ephemeral=True)
+
 
 
 
