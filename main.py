@@ -20,7 +20,7 @@ from Woodcutting import WoodcuttingModule, setup as woodcutting_setup
 import os
 from Mining import setup as mining_setup
 from Battle_System import setup as battle_system_setup
-from DynamicNPCModule import DynamicNPCModule
+from DynamicNPCModule import setup as setup_dynamic_npc
 
 
 
@@ -43,6 +43,10 @@ db = Database(dsn=DATABASE_DSN)
 bot.db = db  # Attach the database instance to the bot object
 
 logging.info("Loading extensions...")
+
+# Initialize DynamicNPCModule early in the setup process
+setup_dynamic_npc(bot)
+logging.info("DynamicNPCModule instance created and attached to bot.")
 
 # When setting up the bot, make sure the CharacterCreation class is defined to accept a bot and a db instance
 # Load your extensions here
@@ -74,8 +78,7 @@ mining_setup(bot)
 
 battle_system_setup(bot)
 
-dynamic_npc_module = DynamicNPCModule(bot)
-bot.dynamic_npc_module = dynamic_npc_module
+
 
 
 
