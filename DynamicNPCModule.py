@@ -3,7 +3,7 @@ from interactions import SlashContext, Extension, Button, ButtonStyle, Component
 import random
 import re
 import logging
-
+import json
 
 class DynamicNPCModule(Extension):
     def __init__(self, bot):
@@ -25,7 +25,7 @@ class DynamicNPCModule(Extension):
             # Extract the NPC ID and the original user ID from the custom ID
             npc_id = int(ctx.custom_id.split("_")[2])
             original_user_id = int(ctx.custom_id.split("_")[3])
-    
+        
             # Ensure that only the original player can proceed
             if ctx.author.id != original_user_id:
                 await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
@@ -41,7 +41,7 @@ class DynamicNPCModule(Extension):
                 WHERE dynamic_npc_id = $1
                 """, npc_id
             )
-    
+        
             if not npc_data:
                 await ctx.send("Unable to find NPC information.", ephemeral=True)
                 return
@@ -65,7 +65,7 @@ class DynamicNPCModule(Extension):
             embed = Embed(title=npc_name, description=dialog['dialog_text'], color=0x00FF00)
             components = []
 
-            # Fetch the available quest for the NPC - make sure to pull the correct quest ID
+            # Fetch the available quest for the NPC - ensure the correct quest is shown for this NPC
             quest = await self.db.fetchrow(
                 """
                 SELECT * FROM quests
@@ -192,26 +192,33 @@ class DynamicNPCModule(Extension):
                 await ctx.send("You have already accepted this quest.", ephemeral=True)
                 return
 
-            # Check for item requirements in the inventory if they exist
-            if quest['required_item_ids'] and quest['required_quantities']:
-                required_item_ids = eval(quest['required_item_ids'])
-                required_quantities = eval(quest['required_quantities'])
+            # Parse the requirements field (assuming it's a JSON string)
+            requirements = quest['requirements']
+            if requirements:
+                requirements = json.loads(requirements)
 
-                # Fetch player's inventory
-                player_inventory = await self.db.fetch(
-                    """
-                    SELECT itemid, quantity FROM inventory WHERE player_id = $1
-                    """, player_id
-                )
+                # Check player's inventory for required items
+                if "required_items" in requirements:
+                    required_items = requirements['required_items']
+                    for item in required_items:
+                        item_id = item['item_id']
+                        quantity = item['quantity']
 
-                # Create a dictionary from the player's inventory for easier look-up
-                inventory_dict = {item['itemid']: item['quantity'] for item in player_inventory}
+                        # Fetch item count from the inventory for the player
+                        player_item_count = await self.db.fetchval(
+                            """
+                            SELECT quantity FROM inventory
+                            WHERE playerid = $1 AND itemid = $2
+                            """, player_id, item_id
+                        )
 
-                # Check if player has the required items and quantities
-                for item_id, required_quantity in zip(required_item_ids, required_quantities):
-                    if item_id not in inventory_dict or inventory_dict[item_id] < required_quantity:
-                        await ctx.send("You do not have the required items to accept this quest.", ephemeral=True)
-                        return
+                        # Ensure the player has enough of the required item
+                        if not player_item_count or player_item_count < quantity:
+                            await ctx.send(
+                                f"You need {quantity} of item ID {item_id} to accept this quest.",
+                                ephemeral=True
+                            )
+                            return
 
             # Assign the quest to the player in the player_quests table
             await self.db.execute(
@@ -231,7 +238,6 @@ class DynamicNPCModule(Extension):
         except Exception as e:
             logging.error(f"Error in accept_quest_handler: {e}")
             await ctx.send("An error occurred while accepting the quest. Please try again later.", ephemeral=True)
-
 
 
 
@@ -303,7 +309,7 @@ class DynamicNPCModule(Extension):
             inventory_items = await self.db.fetch(
                 """
                 SELECT item_id, quantity FROM inventory
-                WHERE player_id = $1
+                WHERE playerid = $1
                 """, player_id
             )
             inventory_dict = {item['item_id']: item['quantity'] for item in inventory_items}
@@ -328,7 +334,7 @@ class DynamicNPCModule(Extension):
                     """
                     UPDATE inventory
                     SET quantity = quantity - $1
-                    WHERE player_id = $2 AND item_id = $3
+                    WHERE playerid = $2 AND item_id = $3
                     """, quantity, player_id, item_id
                 )
 
