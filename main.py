@@ -46,7 +46,7 @@ logging.info("Loading extensions...")
 
 # Initialize DynamicNPCModule early in the setup process
 setup_dynamic_npc(bot)
-logging.info("DynamicNPCModule instance created and attached to bot.")
+
 
 # When setting up the bot, make sure the CharacterCreation class is defined to accept a bot and a db instance
 # Load your extensions here
@@ -158,6 +158,10 @@ async def on_ready():
 
 async def on_shutdown():
     await bot.db.pool.close()
+
+
+async def on_component(ctx: ComponentContext):
+    logging.info(f"Component interaction received: custom_id={ctx.custom_id}")
 
 # Start the bot with the specified token
 bot.start()  # Note: Use start() instead of run()

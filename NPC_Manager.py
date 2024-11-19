@@ -55,7 +55,8 @@ class NPCManager(Extension):
                 dynamic_npc_id = npc["npc_id"]
                 
                 # Trigger interaction via DynamicNPCModule
-                dynamic_npc_module = self.bot.get_cog('DynamicNPCModule')
+                dynamic_npc_module = getattr(self.bot, 'dynamic_npc_module', None)
+
                 if dynamic_npc_module:
                     await dynamic_npc_module.npc_dialog_handler(ctx, dynamic_npc_id)
                 else:
