@@ -83,7 +83,7 @@ class playerinterface(Extension):
 
             # Provide a default value for button_color if it's None or NULL
             button_color = command.get('button_color') or 'PRIMARY'
-            logging.info(f"Button color set to: {button_color}")
+            
 
             # Check if the command has quest requirements and evaluate them
             if command['required_quest_id'] is not None:
@@ -113,7 +113,7 @@ class playerinterface(Extension):
                 button_style = ButtonStyle.DANGER
             elif button_color == 'SECONDARY':
                 button_style = ButtonStyle.SECONDARY
-            logging.info(f"Button style set to: {button_style}")
+            
 
             # Adjust custom_id generation for dynamic NPC buttons to be consistent with what DynamicNPCModule expects
             if "talk_to_" in command['command_name']:
