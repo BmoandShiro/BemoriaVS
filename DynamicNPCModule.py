@@ -145,27 +145,111 @@ class DynamicNPCModule(Extension):
 
         # Send new dialogue
         await self.send_dialogue(ctx, new_dialog, player_id)
+        
+
+
+    @component_callback(re.compile(r"^accept_quest_\d+_\d+$"))
+    async def accept_quest_handler(self, ctx: ComponentContext):
+        try:
+            # Extract quest ID and player ID from the custom ID
+            custom_id_parts = ctx.custom_id.split("_")
+        
+            if len(custom_id_parts) != 3:
+                raise ValueError("Custom ID format incorrect")
+
+            _, quest_id, player_id = custom_id_parts
+            quest_id = int(quest_id)
+            player_id = int(player_id)
+
+            # Log for debugging
+            logging.info(f"Accept quest handler triggered for quest_id: {quest_id}, player_id: {player_id}")
+
+            # Determine if the quest is static or dynamic
+            is_dynamic = quest_id >= 1000
+
+            # Fetch quest details from the database based on the type
+            if is_dynamic:
+                quest = await self.db.fetchrow(
+                    """
+                    SELECT * FROM dynamic_quests WHERE dynamic_quest_id = $1
+                    """, quest_id
+                )
+            else:
+                quest = await self.db.fetchrow(
+                    """
+                    SELECT * FROM quests WHERE quest_id = $1
+                    """, quest_id
+                )
+
+            if not quest:
+                await ctx.send("The quest could not be found. Please try again later.", ephemeral=True)
+                return
+
+            # Check if the player already has this quest
+            existing_quest = await self.db.fetchval(
+                """
+                SELECT quest_id FROM player_quests
+                WHERE player_id = $1 AND quest_id = $2 AND is_dynamic = $3
+                """, player_id, quest_id, is_dynamic
+            )
+
+            if existing_quest:
+                await ctx.send("You have already accepted this quest.", ephemeral=True)
+                return
+
+            # Assign the quest to the player
+            await self.db.execute(
+                """
+                INSERT INTO player_quests (player_id, quest_id, status, progress, is_dynamic)
+                VALUES ($1, $2, 'in_progress', '{}', $3)
+                """, player_id, quest_id, is_dynamic
+            )
+
+            # Send confirmation message to the player
+            await ctx.send(f"You have accepted the quest: {quest['name']}!", ephemeral=True)
+
+        except ValueError:
+            logging.error("ValueError in accept_quest_handler: Custom ID format incorrect")
+            await ctx.send("An error occurred while accepting the quest. Please try again later.", ephemeral=True)
+        except Exception as e:
+            logging.error(f"Error in accept_quest_handler: {e}")
+            await ctx.send("An error occurred while accepting the quest. Please try again later.", ephemeral=True)
+
+
+
+
+
+
 
     async def assign_quest(self, player_id, quest_id):
-        # Assign a quest to the player
-        existing_quest = await self.db.fetchval(
-            """
-            SELECT quest_id FROM dynamic_player_quests
-            WHERE player_id = $1 AND quest_id = $2
-            """, player_id, quest_id
-        )
+        logging.info(f"Attempting to assign quest_id: {quest_id} to player_id: {player_id}")
+        try:
+            # Check if the player already has the quest
+            existing_quest = await self.db.fetchval(
+                """
+                SELECT quest_id FROM dynamic_player_quests
+                WHERE player_id = $1 AND quest_id = $2
+                """, player_id, quest_id
+            )
 
-        if existing_quest:
-            return "You already have this quest."
+            if existing_quest:
+                logging.info(f"Player {player_id} already has quest_id: {quest_id}")
+                return "You already have this quest."
 
-        await self.db.execute(
-            """
-            INSERT INTO dynamic_player_quests (player_id, quest_id, progress, status)
-            VALUES ($1, $2, 0, 'in_progress')
-            """, player_id, quest_id
-        )
+            # Insert the quest as 'in_progress' for the player
+            await self.db.execute(
+                """
+                INSERT INTO dynamic_player_quests (player_id, quest_id, progress, status)
+                VALUES ($1, $2, 0, 'in_progress')
+                """, player_id, quest_id
+            )
 
-        return "You have been assigned a new quest!"
+            logging.info(f"Quest_id: {quest_id} successfully assigned to player_id: {player_id}")
+            return "You have been assigned a new quest!"
+        except Exception as e:
+            logging.error(f"Error while assigning quest_id: {quest_id} to player_id: {player_id}: {e}")
+            return "An error occurred while assigning the quest. Please try again later."
+
 
     async def update_quest_progress(self, player_id, quest_id, progress):
         # Update quest progress for the player
