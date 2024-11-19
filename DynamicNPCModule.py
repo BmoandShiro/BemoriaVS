@@ -2,11 +2,16 @@ import asyncio
 from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, component_callback, Embed
 import random
 import re
+import logging
+
 
 class DynamicNPCModule(Extension):
     def __init__(self, bot):
+        
         self.bot = bot
         self.db = bot.db
+        logging.info("DynamicNPCModule initialized successfully.")
+        
 
     @component_callback(re.compile(r"^npc_dialog_\d+$"))
     async def npc_dialog_handler(self, ctx: ComponentContext):
@@ -128,4 +133,5 @@ class DynamicNPCModule(Extension):
 
 # Setup function to load this as an extension
 def setup(bot):
+    logging.info("Setting up DynamicNPCModule extension...")
     DynamicNPCModule(bot)
