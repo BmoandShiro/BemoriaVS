@@ -221,12 +221,14 @@ class DynamicNPCModule(Extension):
                             return
 
             # Assign the quest to the player in the player_quests table
+            # When a quest is accepted, initialize current_step
             await self.db.execute(
                 """
-                INSERT INTO player_quests (player_id, quest_id, status, progress, is_dynamic)
-                VALUES ($1, $2, 'in_progress', '{}', $3)
+                INSERT INTO player_quests (player_id, quest_id, status, current_step, progress, is_dynamic)
+                VALUES ($1, $2, 'in_progress', 0, '{}', $3)
                 """, player_id, quest_id, quest['is_dynamic']
             )
+
 
             # Send confirmation message to the player
             quest_name = quest['name']  # Corrected to use the 'name' column
@@ -276,15 +278,63 @@ class DynamicNPCModule(Extension):
             return "An error occurred while assigning the quest. Please try again later."
 
 
-    async def update_quest_progress(self, player_id, quest_id, progress):
-        # Update quest progress for the player
-        await self.db.execute(
+    async def update_quest_progress(self, player_id, quest_id, item_id=None, quantity=1):
+        # Fetch the player's current quest data
+        quest_data = await self.db.fetchrow(
             """
-            UPDATE dynamic_player_quests
-            SET progress = $1
-            WHERE player_id = $2 AND quest_id = $3
-            """, progress, player_id, quest_id
+            SELECT * FROM player_quests
+            WHERE player_id = $1 AND quest_id = $2 AND status = 'in_progress'
+            """, player_id, quest_id
         )
+    
+        if not quest_data:
+            logging.error(f"Quest data not found for player_id: {player_id}, quest_id: {quest_id}")
+            return
+    
+        current_step = quest_data['current_step']
+        quest_details = await self.db.fetchrow("SELECT * FROM quests WHERE quest_id = $1", quest_id)
+    
+        if not quest_details:
+            logging.error(f"Quest details not found for quest_id: {quest_id}")
+            return
+    
+        steps = json.loads(quest_details['steps'])
+    
+        if current_step < len(steps):
+            step = steps[current_step]
+        
+            if step['requirement_type'] == 'collect' and step['item_id'] == item_id:
+                # Update progress
+                progress = quest_data.get('progress', {})
+                current_quantity = progress.get(str(item_id), 0)
+                new_quantity = current_quantity + quantity
+            
+                # Update progress in database
+                progress[str(item_id)] = new_quantity
+                await self.db.execute(
+                    """
+                    UPDATE player_quests SET progress = $1
+                    WHERE player_id = $2 AND quest_id = $3
+                    """, json.dumps(progress), player_id, quest_id
+                )
+
+                # Check if requirement is fulfilled
+                if new_quantity >= step['quantity']:
+                    # Move to next step
+                    await self.db.execute(
+                        """
+                        UPDATE player_quests SET current_step = current_step + 1
+                        WHERE player_id = $1 AND quest_id = $2
+                        """, player_id, quest_id
+                    )
+                    await self.notify_quest_update(player_id, quest_id)
+
+    async def notify_quest_update(self, player_id, quest_id):
+        # Notify player of quest update
+        await self.bot.send_message(
+            player_id, f"Great job! You've completed a step in your quest. Check your quest log for updates!"
+        )
+
 
     @component_callback(re.compile(r"^turn_in_quest\|\d+\|\d+$"))
     async def turn_in_quest_handler(self, ctx: ComponentContext):
@@ -294,7 +344,7 @@ class DynamicNPCModule(Extension):
             quest_id = int(quest_id_str)
             player_id = int(player_id_str)
 
-            # Fetch the quest details
+            # Fetch the quest details from the quests table
             quest = await self.db.fetchrow(
                 """
                 SELECT * FROM quests WHERE quest_id = $1
@@ -305,54 +355,86 @@ class DynamicNPCModule(Extension):
                 await ctx.send("The quest could not be found. Please try again later.", ephemeral=True)
                 return
 
-            # Fetch player inventory
-            inventory_items = await self.db.fetch(
+            # Fetch player's current quest data
+            player_quest = await self.db.fetchrow(
                 """
-                SELECT item_id, quantity FROM inventory
-                WHERE playerid = $1
-                """, player_id
+                SELECT * FROM player_quests
+                WHERE player_id = $1 AND quest_id = $2 AND status = 'in_progress'
+                """, player_id, quest_id
             )
-            inventory_dict = {item['item_id']: item['quantity'] for item in inventory_items}
 
-            # Check if the player has the required items
-            required_item_ids = list(map(int, quest['required_item_ids'].split(',')))
-            required_quantities = list(map(int, quest['required_quantities'].split(',')))
-
-            has_all_required_items = True
-            for item_id, quantity in zip(required_item_ids, required_quantities):
-                if inventory_dict.get(item_id, 0) < quantity:
-                    has_all_required_items = False
-                    break
-
-            if not has_all_required_items:
-                await ctx.send("You do not have all the required items to turn in the quest.", ephemeral=True)
+            if not player_quest:
+                await ctx.send("You do not have this quest in progress.", ephemeral=True)
                 return
 
-            # Remove the required items from the player's inventory
-            for item_id, quantity in zip(required_item_ids, required_quantities):
+            # Load steps from quest details
+            steps = json.loads(quest['steps'])  # Assuming the steps are stored as JSONB in the quests table
+            current_step = player_quest['current_step']
+
+            if current_step >= len(steps):
+                await ctx.send("You have already completed all steps for this quest.", ephemeral=True)
+                return
+
+            # Get the current step's requirements
+            step = steps[current_step]
+
+            if step['requirement_type'] == 'collect':
+                required_item_id = step['item_id']
+                required_quantity = step['quantity']
+
+                # Fetch player inventory
+                player_item_count = await self.db.fetchval(
+                    """
+                    SELECT quantity FROM inventory
+                    WHERE playerid = $1 AND itemid = $2
+                    """, player_id, required_item_id
+                )
+
+                if not player_item_count or player_item_count < required_quantity:
+                    await ctx.send(f"You need {required_quantity} of item ID {required_item_id} to complete this step.", ephemeral=True)
+                    return
+
+                # Remove items from inventory
                 await self.db.execute(
                     """
                     UPDATE inventory
                     SET quantity = quantity - $1
-                    WHERE playerid = $2 AND item_id = $3
-                    """, quantity, player_id, item_id
+                    WHERE playerid = $2 AND itemid = $3
+                    """, required_quantity, player_id, required_item_id
                 )
 
-            # Mark the quest as complete
-            await self.db.execute(
-                """
-                UPDATE player_quests
-                SET status = 'completed'
-                WHERE player_id = $1 AND quest_id = $2
-                """, player_id, quest_id
-            )
+            elif step['requirement_type'] == 'talk':
+                # Assuming the player needs to talk to an NPC; this can be more complex
+                if step['npc_id'] != player_quest['npc_id']:
+                    await ctx.send("You need to talk to a different NPC to complete this step.", ephemeral=True)
+                    return
 
-            # Send a success message
-            await ctx.send(f"Congratulations! You have completed the quest: {quest['name']}!", ephemeral=True)
+            # Move to the next step or mark as complete
+            if current_step + 1 >= len(steps):
+                # Mark quest as complete
+                await self.db.execute(
+                    """
+                    UPDATE player_quests
+                    SET status = 'completed'
+                    WHERE player_id = $1 AND quest_id = $2
+                    """, player_id, quest_id
+                )
+                await ctx.send(f"Congratulations! You have completed the quest: {quest['name']}!", ephemeral=True)
+            else:
+                # Increment current step
+                await self.db.execute(
+                    """
+                    UPDATE player_quests
+                    SET current_step = current_step + 1
+                    WHERE player_id = $1 AND quest_id = $2
+                    """, player_id, quest_id
+                )
+                await ctx.send(f"Step {current_step + 1} completed! Move on to the next step.", ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error in turn_in_quest_handler: {e}")
             await ctx.send("An error occurred while turning in the quest. Please try again later.", ephemeral=True)
+
 
 
     async def handle_npc_action(self, player_id, action_type, action_value):
