@@ -19,23 +19,21 @@ class DynamicNPCModule(Extension):
 
     @component_callback(re.compile(r"^npc_dialog_\d+_\d+$"))
     async def npc_dialog_handler(self, ctx: ComponentContext):
+        logging.info(f"npc_dialog_handler triggered for NPC ID: {ctx.custom_id}")  # Add more context for debugging
+    
+        # Extract the NPC ID from the custom ID
         try:
-            # Extract NPC ID and player ID from the custom ID
-            parts = ctx.custom_id.split("_")
-            npc_id = int(parts[2])  # Assuming "npc_dialog_{npc_id}_{player_id}"
-            original_user_id = int(parts[3])
+            npc_id = int(ctx.custom_id.split("_")[2])
+        except ValueError:
+            await ctx.send("Error: Invalid NPC ID format.", ephemeral=True)
+            return
 
-            logging.info(f"npc_dialog_handler triggered for NPC ID: {npc_id}, Original User ID: {original_user_id}")
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
 
-            # Ensure the user interacting is the correct user
-            if ctx.author.id != original_user_id:
-                await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
-                return
+        await ctx.defer(ephemeral=True)
 
-            # Defer the interaction early to prevent timeout
-            await ctx.defer(ephemeral=True)
-
-            # Fetch initial dialog for the NPC
+        # Fetch initial dialogue for the NPC
+        try:
             dialog = await self.db.fetchrow(
                 """
                 SELECT * FROM dynamic_dialogs
@@ -43,41 +41,50 @@ class DynamicNPCModule(Extension):
                 ORDER BY RANDOM() LIMIT 1
                 """, npc_id
             )
-
+        
             if not dialog:
                 await ctx.send("This NPC has nothing to say at the moment.", ephemeral=True)
                 return
 
-            # Send dialog and buttons for player responses
-            await self.send_dialogue(ctx, dialog, original_user_id)
-
+            # Note: Make sure the column name is correct here
+            await self.send_dialogue(ctx, dialog, player_id)
         except Exception as e:
             logging.error(f"Error in npc_dialog_handler: {e}")
-            await ctx.send("An error occurred while processing your request. Please try again later.", ephemeral=True)
+            await ctx.send("An error occurred. Please try again later.", ephemeral=True)
 
 
     async def send_dialogue(self, ctx, dialog, player_id):
-        embed = Embed(title="NPC Interaction", description=dialog['dialog_text'], color=0x00FF00)
-
-        # Fetch available responses for the player
-        responses = await self.db.fetch(
-            """
-            SELECT * FROM dynamic_dialogs
-            WHERE previous_dialog_id = $1
-            """, dialog['dialogue_id']
-        )
-
-        components = []
-        for response in responses:
-            components.append(
-                Button(
-                    style=ButtonStyle.SECONDARY,
-                    label=response['response_text'],
-                    custom_id=f"npc_response_{response['dialogue_id']}_{player_id}"
-                )
+        # Verify the correct use of columns that actually exist in the database
+        try:
+            embed = Embed(
+                title="NPC Interaction",
+                description=dialog['dialog_text'],  # Correct column name
+                color=0x00FF00
+            )
+        
+            # Fetch available responses for the player
+            responses = await self.db.fetch(
+                """
+                SELECT * FROM dynamic_dialogs
+                WHERE follow_up_dialog_id = $1
+                """, dialog['dialog_id']
             )
 
-        await ctx.send(embeds=[embed], components=components, ephemeral=True)
+            components = []
+            for response in responses:
+                components.append(
+                    Button(
+                        style=ButtonStyle.SECONDARY,
+                        label=response['dialog_text'],  # Adjusted if needed to display the right text
+                        custom_id=f"npc_response_{response['dialog_id']}_{player_id}"
+                    )
+                )
+
+            await ctx.send(embeds=[embed], components=components, ephemeral=True)
+        except KeyError as e:
+            logging.error(f"KeyError in send_dialogue: Missing key {e}")
+            await ctx.send("An error occurred while generating the dialog. Please try again later.", ephemeral=True)
+
 
     @component_callback(re.compile(r"^npc_response_\d+_\d+$"))
     async def npc_response_handler(self, ctx: ComponentContext):
