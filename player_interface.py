@@ -65,9 +65,11 @@ class playerinterface(Extension):
 
 
 
+    import logging
+
     async def get_location_based_buttons(self, location_id, player_id):
         db = self.bot.db
-        # Fetch relevant commands based on location_id
+        logging.info(f"Fetching location-based buttons for location_id: {location_id}, player_id: {player_id}")
         commands = await db.fetch("""
             SELECT command_name, button_label, custom_id, button_color, condition, required_quest_id, required_quest_status, required_item_id
             FROM location_commands
@@ -75,9 +77,13 @@ class playerinterface(Extension):
         """, location_id)
 
         buttons = []
+        logging.info(f"Fetched {len(commands)} commands for location_id {location_id}")
         for command in commands:
+            logging.info(f"Processing command: {command}")
+
             # Provide a default value for button_color if it's None or NULL
             button_color = command.get('button_color') or 'PRIMARY'
+            logging.info(f"Button color set to: {button_color}")
 
             # Check if the command has quest requirements and evaluate them
             if command['required_quest_id'] is not None:
@@ -107,11 +113,34 @@ class playerinterface(Extension):
                 button_style = ButtonStyle.DANGER
             elif button_color == 'SECONDARY':
                 button_style = ButtonStyle.SECONDARY
+            logging.info(f"Button style set to: {button_style}")
+
+            # Adjust custom_id generation for dynamic NPC buttons to be consistent with what DynamicNPCModule expects
+            if "talk_to_" in command['command_name']:
+                npc_name = command['command_name'].split("talk_to_")[1]
+                npc_id = await db.fetchval("SELECT dynamic_npc_id FROM dynamic_npcs WHERE LOWER(name) = LOWER($1)", npc_name)
+
+                if npc_id:
+                    # Update custom_id to match expected pattern for DynamicNPCModule
+                    custom_id = f"npc_dialog_{npc_id}"  # Use npc_id to ensure the custom_id is uniquely linked to the NPC
+                else:
+                    custom_id = command['custom_id']
+            else:
+                custom_id = command['custom_id']
+
+
+
+
+
+            logging.info(f"Final custom_id for button: {custom_id}")
 
             # Add the button if all conditions are met or if no conditions exist
-            buttons.append(Button(style=button_style, label=command['button_label'], custom_id=command['custom_id']))
+            buttons.append(Button(style=button_style, label=command['button_label'], custom_id=custom_id))
 
+        logging.info(f"Returning {len(buttons)} buttons for location_id {location_id}")
         return buttons
+
+
 
            
 

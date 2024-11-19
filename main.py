@@ -20,6 +20,9 @@ from Woodcutting import WoodcuttingModule, setup as woodcutting_setup
 import os
 from Mining import setup as mining_setup
 from Battle_System import setup as battle_system_setup
+from DynamicNPCModule import DynamicNPCModule
+
+
 
 
 
@@ -70,6 +73,9 @@ bot.shop_manager = shop_manager
 mining_setup(bot)
 
 battle_system_setup(bot)
+
+dynamic_npc_module = DynamicNPCModule(bot)
+bot.dynamic_npc_module = dynamic_npc_module
 
 
 
