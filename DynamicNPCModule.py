@@ -78,7 +78,7 @@ class DynamicNPCModule(Extension):
                 quest_button = Button(
                     style=ButtonStyle.PRIMARY,
                     label=f"Accept Quest: {quest['quest_name']}",
-                    custom_id=f"accept_quest_{quest['dynamic_quest_id']}_{player_id}"
+                    custom_id=f"accept_quest|{quest['dynamic_quest_id']}|{player_id}"
                 )
                 components.append(quest_button)
 
@@ -87,6 +87,7 @@ class DynamicNPCModule(Extension):
         except Exception as e:
             logging.error(f"Error in npc_dialog_handler: {e}")
             await ctx.send("An error occurred. Please try again later.", ephemeral=True)
+
 
 
 
@@ -148,18 +149,13 @@ class DynamicNPCModule(Extension):
         
 
 
-    @component_callback(re.compile(r"^accept_quest_\d+_\d+$"))
+    @component_callback(re.compile(r"^accept_quest\|\d+\|\d+$"))
     async def accept_quest_handler(self, ctx: ComponentContext):
         try:
             # Extract quest ID and player ID from the custom ID
-            custom_id_parts = ctx.custom_id.split("_")
-        
-            if len(custom_id_parts) != 3:
-                raise ValueError("Custom ID format incorrect")
-
-            _, quest_id, player_id = custom_id_parts
-            quest_id = int(quest_id)
-            player_id = int(player_id)
+            _, quest_id_str, player_id_str = ctx.custom_id.split("|")
+            quest_id = int(quest_id_str)
+            player_id = int(player_id_str)
 
             # Log for debugging
             logging.info(f"Accept quest handler triggered for quest_id: {quest_id}, player_id: {player_id}")
@@ -169,18 +165,21 @@ class DynamicNPCModule(Extension):
 
             # Fetch quest details from the database based on the type
             if is_dynamic:
+                # Fetch the quest from dynamic_quests
                 quest = await self.db.fetchrow(
                     """
                     SELECT * FROM dynamic_quests WHERE dynamic_quest_id = $1
                     """, quest_id
                 )
             else:
+                # Fetch the quest from quests
                 quest = await self.db.fetchrow(
                     """
                     SELECT * FROM quests WHERE quest_id = $1
                     """, quest_id
                 )
 
+            # If the quest was not found in either table
             if not quest:
                 await ctx.send("The quest could not be found. Please try again later.", ephemeral=True)
                 return
@@ -197,7 +196,7 @@ class DynamicNPCModule(Extension):
                 await ctx.send("You have already accepted this quest.", ephemeral=True)
                 return
 
-            # Assign the quest to the player
+            # Assign the quest to the player in the player_quests table
             await self.db.execute(
                 """
                 INSERT INTO player_quests (player_id, quest_id, status, progress, is_dynamic)
@@ -206,10 +205,10 @@ class DynamicNPCModule(Extension):
             )
 
             # Send confirmation message to the player
-            await ctx.send(f"You have accepted the quest: {quest['name']}!", ephemeral=True)
+            await ctx.send(f"You have accepted the quest: {quest['quest_name']}!", ephemeral=True)
 
-        except ValueError:
-            logging.error("ValueError in accept_quest_handler: Custom ID format incorrect")
+        except ValueError as ve:
+            logging.error(f"ValueError in accept_quest_handler: {ve}")
             await ctx.send("An error occurred while accepting the quest. Please try again later.", ephemeral=True)
         except Exception as e:
             logging.error(f"Error in accept_quest_handler: {e}")
