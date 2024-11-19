@@ -160,27 +160,19 @@ class DynamicNPCModule(Extension):
             # Log for debugging
             logging.info(f"Accept quest handler triggered for quest_id: {quest_id}, player_id: {player_id}")
 
-            # Determine if the quest is static or dynamic
-            is_dynamic = quest_id >= 1000
+            # Fetch quest details from the unified quests table
+            quest = await self.db.fetchrow(
+                """
+                SELECT * FROM quests WHERE quest_id = $1
+                """, quest_id
+            )
 
-            # Fetch quest details from the database based on the type
-            if is_dynamic:
-                # Fetch the quest from dynamic_quests
-                quest = await self.db.fetchrow(
-                    """
-                    SELECT * FROM dynamic_quests WHERE dynamic_quest_id = $1
-                    """, quest_id
-                )
-            else:
-                # Fetch the quest from quests
-                quest = await self.db.fetchrow(
-                    """
-                    SELECT * FROM quests WHERE quest_id = $1
-                    """, quest_id
-                )
+            # Log the fetched quest for debugging
+            logging.info(f"Fetched quest details: {quest}")
 
-            # If the quest was not found in either table
+            # Check if the quest was found
             if not quest:
+                logging.error(f"Quest with quest_id: {quest_id} could not be found in the quests table.")
                 await ctx.send("The quest could not be found. Please try again later.", ephemeral=True)
                 return
 
@@ -188,11 +180,12 @@ class DynamicNPCModule(Extension):
             existing_quest = await self.db.fetchval(
                 """
                 SELECT quest_id FROM player_quests
-                WHERE player_id = $1 AND quest_id = $2 AND is_dynamic = $3
-                """, player_id, quest_id, is_dynamic
+                WHERE player_id = $1 AND quest_id = $2
+                """, player_id, quest_id
             )
 
             if existing_quest:
+                logging.info(f"Player {player_id} already has the quest with quest_id: {quest_id}")
                 await ctx.send("You have already accepted this quest.", ephemeral=True)
                 return
 
@@ -201,11 +194,12 @@ class DynamicNPCModule(Extension):
                 """
                 INSERT INTO player_quests (player_id, quest_id, status, progress, is_dynamic)
                 VALUES ($1, $2, 'in_progress', '{}', $3)
-                """, player_id, quest_id, is_dynamic
+                """, player_id, quest_id, quest['is_dynamic']
             )
 
             # Send confirmation message to the player
-            await ctx.send(f"You have accepted the quest: {quest['quest_name']}!", ephemeral=True)
+            quest_name = quest['name']  # Corrected to use the 'name' column
+            await ctx.send(f"You have accepted the quest: {quest_name}!", ephemeral=True)
 
         except ValueError as ve:
             logging.error(f"ValueError in accept_quest_handler: {ve}")
@@ -213,6 +207,7 @@ class DynamicNPCModule(Extension):
         except Exception as e:
             logging.error(f"Error in accept_quest_handler: {e}")
             await ctx.send("An error occurred while accepting the quest. Please try again later.", ephemeral=True)
+
 
 
 
