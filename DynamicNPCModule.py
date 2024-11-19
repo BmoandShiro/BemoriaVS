@@ -19,21 +19,36 @@ class DynamicNPCModule(Extension):
 
     @component_callback(re.compile(r"^npc_dialog_\d+_\d+$"))
     async def npc_dialog_handler(self, ctx: ComponentContext):
-        logging.info(f"npc_dialog_handler triggered for NPC ID: {ctx.custom_id}")  # Add more context for debugging
-    
-        # Extract the NPC ID from the custom ID
+        logging.info(f"npc_dialog_handler triggered for NPC ID: {ctx.custom_id}")
+
         try:
+            # Extract the NPC ID and the original user ID from the custom ID
             npc_id = int(ctx.custom_id.split("_")[2])
-        except ValueError:
-            await ctx.send("Error: Invalid NPC ID format.", ephemeral=True)
-            return
+            original_user_id = int(ctx.custom_id.split("_")[3])
+        
+            # Ensure that only the original player can proceed
+            if ctx.author.id != original_user_id:
+                await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+                return
 
-        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+            player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+            await ctx.defer(ephemeral=True)
 
-        await ctx.defer(ephemeral=True)
+            # Fetch the NPC name from the database
+            npc_data = await self.db.fetchrow(
+                """
+                SELECT name FROM dynamic_npcs
+                WHERE dynamic_npc_id = $1
+                """, npc_id
+            )
+        
+            if not npc_data:
+                await ctx.send("Unable to find NPC information.", ephemeral=True)
+                return
 
-        # Fetch initial dialogue for the NPC
-        try:
+            npc_name = npc_data['name']
+
+            # Fetch initial dialogue for the NPC
             dialog = await self.db.fetchrow(
                 """
                 SELECT * FROM dynamic_dialogs
@@ -41,16 +56,38 @@ class DynamicNPCModule(Extension):
                 ORDER BY RANDOM() LIMIT 1
                 """, npc_id
             )
-        
+
             if not dialog:
                 await ctx.send("This NPC has nothing to say at the moment.", ephemeral=True)
                 return
 
-            # Note: Make sure the column name is correct here
-            await self.send_dialogue(ctx, dialog, player_id)
+            # Create an embed to show the NPC dialogue
+            embed = Embed(title=npc_name, description=dialog['dialog_text'], color=0x00FF00)
+            components = []
+
+            # Fetch the available quest for the NPC
+            quest = await self.db.fetchrow(
+                """
+                SELECT * FROM dynamic_quests
+                WHERE npc_id = $1
+                """, npc_id
+            )
+
+            # If a quest is available, add a button to accept it
+            if quest:
+                quest_button = Button(
+                    style=ButtonStyle.PRIMARY,
+                    label=f"Accept Quest: {quest['quest_name']}",
+                    custom_id=f"accept_quest_{quest['dynamic_quest_id']}_{player_id}"
+                )
+                components.append(quest_button)
+
+            await ctx.send(embeds=[embed], components=components, ephemeral=True)
+
         except Exception as e:
             logging.error(f"Error in npc_dialog_handler: {e}")
             await ctx.send("An error occurred. Please try again later.", ephemeral=True)
+
 
 
     async def send_dialogue(self, ctx, dialog, player_id):
