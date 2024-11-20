@@ -51,14 +51,16 @@ class Inventory:
             return "Item not found in inventory."
 
         if existing_item["quantity"] > quantity:
+            # Reduce quantity and let the trigger handle further deletions if needed
             new_quantity = existing_item["quantity"] - quantity
             await self.db.execute(
                 "UPDATE inventory SET quantity = $1 WHERE inventoryid = $2",
                 new_quantity, existing_item["inventoryid"]
             )
         else:
+            # Set quantity to 0, triggering automatic deletion
             await self.db.execute(
-                "DELETE FROM inventory WHERE inventoryid = $1",
+                "UPDATE inventory SET quantity = 0 WHERE inventoryid = $1",
                 existing_item["inventoryid"]
             )
 
@@ -70,6 +72,7 @@ class Inventory:
         remaining_slots = max_slots - current_item_count
 
         return f"Item removed from inventory. Remaining slots: {remaining_slots}."
+
     
     async def remove_item_by_inventory_id(self, inventory_id):
         # Fetch item details from inventory to determine if it's a caught fish
