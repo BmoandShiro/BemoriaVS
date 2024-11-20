@@ -19,14 +19,11 @@ class DynamicNPCModule(Extension):
 
     @component_callback(re.compile(r"^npc_dialog_\d+_\d+$"))
     async def npc_dialog_handler(self, ctx: ComponentContext):
-        logging.info(f"npc_dialog_handler triggered for NPC ID: {ctx.custom_id}")
-
         try:
-            # Extract the NPC ID and the original user ID from the custom ID
-            npc_id = int(ctx.custom_id.split("_")[2])
-            original_user_id = int(ctx.custom_id.split("_")[3])
-        
-            # Ensure that only the original player can proceed
+            # Extract NPC ID and original user ID
+            npc_id, original_user_id = map(int, ctx.custom_id.split("_")[2:4])
+
+            # Ensure only original player can interact
             if ctx.author.id != original_user_id:
                 await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
                 return
@@ -34,59 +31,76 @@ class DynamicNPCModule(Extension):
             player_id = await self.bot.db.get_or_create_player(ctx.author.id)
             await ctx.defer(ephemeral=True)
 
-            # Fetch the NPC name from the database
-            npc_data = await self.db.fetchrow(
-                """
-                SELECT name FROM dynamic_npcs
-                WHERE dynamic_npc_id = $1
-                """, npc_id
-            )
-        
+            # Fetch NPC details
+            npc_data = await self.db.fetchrow("""
+                SELECT * FROM dynamic_npcs WHERE dynamic_npc_id = $1
+            """, npc_id)
+
             if not npc_data:
                 await ctx.send("Unable to find NPC information.", ephemeral=True)
                 return
 
             npc_name = npc_data['name']
 
-            # Fetch initial dialogue for the NPC
-            dialog = await self.db.fetchrow(
-                """
-                SELECT * FROM dynamic_dialogs
-                WHERE npc_id = $1 AND initial = TRUE
-                ORDER BY RANDOM() LIMIT 1
-                """, npc_id
-            )
+            logging.info(f"Checking for quests that player_id: {player_id} can turn in at npc_id: {npc_id}")
+            
+            # Fetch quests that can be turned in at this NPC
+            turn_in_quests = await self.db.fetch("""
+                SELECT * FROM player_quests pq
+                JOIN quests q ON pq.quest_id = q.quest_id
+                WHERE pq.player_id = $1 AND pq.status = 'in_progress' 
+                AND q.turn_in_npc_id = $2
+            """, player_id, npc_id)
 
-            if not dialog:
-                await ctx.send("This NPC has nothing to say at the moment.", ephemeral=True)
+            if not turn_in_quests:
+                logging.info(f"No quests found for player_id: {player_id} and npc_id: {npc_id} to be turned in.")
+                await ctx.send(f"No quests can be turned in at {npc_name}.", ephemeral=True)
                 return
 
-            # Create an embed to show the NPC dialogue
-            embed = Embed(title=npc_name, description=dialog['dialog_text'], color=0x00FF00)
-            components = []
+            for quest in turn_in_quests:
+                try:
+                    objective = json.loads(quest['objective'])
+                    logging.info(f"Objective for quest {quest['quest_id']}: {objective}")
 
-            # Fetch the available quest for the NPC - ensure the correct quest is shown for this NPC
-            quest = await self.db.fetchrow(
-                """
-                SELECT * FROM quests
-                WHERE npc_id = $1
-                """, npc_id
-            )
+                    # If objective is 'collect', check player's inventory
+                    if objective['type'] == 'collect':
+                        item_id = objective['item_id']
+                        required_quantity = objective['quantity']
 
-            # If a quest is available, add a button to accept it
-            if quest:
-                quest_button = Button(
-                    style=ButtonStyle.PRIMARY,
-                    label=f"Accept Quest: {quest['name']}",
-                    custom_id=f"accept_quest|{quest['quest_id']}|{player_id}"
-                )
-                components.append(quest_button)
+                        # Fetch player's inventory count
+                        player_item_count = await self.db.fetchval("""
+                            SELECT quantity FROM inventory
+                            WHERE playerid = $1 AND itemid = $2
+                        """, player_id, item_id)
 
-            await ctx.send(embeds=[embed], components=components, ephemeral=True)
+                        if player_item_count and player_item_count >= required_quantity:
+                            # Remove items from inventory
+                            await self.db.execute("""
+                                UPDATE inventory SET quantity = quantity - $1
+                                WHERE playerid = $2 AND itemid = $3
+                            """, required_quantity, player_id, item_id)
+
+                            # Mark quest as completed
+                            await self.db.execute("""
+                                UPDATE player_quests
+                                SET status = 'completed'
+                                WHERE player_id = $1 AND quest_id = $2
+                            """, player_id, quest['quest_id'])
+
+                            await ctx.send(f"Congratulations! You have completed the quest: {quest['name']}!", ephemeral=True)
+                            return
+
+                except Exception as e:
+                    logging.error(f"Error parsing objective for quest {quest['quest_id']}: {e}")
+                    await ctx.send("An error occurred while processing quest objectives. Please try again later.", ephemeral=True)
+                    return
+
+            await ctx.send(f"No quests are ready to be turned in at {npc_name}.", ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error in npc_dialog_handler: {e}")
-            await ctx.send("An error occurred. Please try again later.", ephemeral=True)
+            await ctx.send("An error occurred while interacting with the NPC. Please try again later.", ephemeral=True)
+
 
 
 
@@ -291,14 +305,14 @@ class DynamicNPCModule(Extension):
             logging.error(f"Quest data not found for player_id: {player_id}, quest_id: {quest_id}")
             return
     
-        current_step = quest_data['current_step']
+        #current_step = quest_data['current_step']
         quest_details = await self.db.fetchrow("SELECT * FROM quests WHERE quest_id = $1", quest_id)
     
         if not quest_details:
             logging.error(f"Quest details not found for quest_id: {quest_id}")
             return
     
-        steps = json.loads(quest_details['steps'])
+        '''steps = json.loads(quest_details['steps'])
     
         if current_step < len(steps):
             step = steps[current_step]
@@ -333,7 +347,7 @@ class DynamicNPCModule(Extension):
         # Notify player of quest update
         await self.bot.send_message(
             player_id, f"Great job! You've completed a step in your quest. Check your quest log for updates!"
-        )
+        )'''
 
 
     @component_callback(re.compile(r"^turn_in_quest\|\d+\|\d+$"))
@@ -367,69 +381,7 @@ class DynamicNPCModule(Extension):
                 await ctx.send("You do not have this quest in progress.", ephemeral=True)
                 return
 
-            # Load steps from quest details
-            steps = json.loads(quest['steps'])  # Assuming the steps are stored as JSONB in the quests table
-            current_step = player_quest['current_step']
-
-            if current_step >= len(steps):
-                await ctx.send("You have already completed all steps for this quest.", ephemeral=True)
-                return
-
-            # Get the current step's requirements
-            step = steps[current_step]
-
-            if step['requirement_type'] == 'collect':
-                required_item_id = step['item_id']
-                required_quantity = step['quantity']
-
-                # Fetch player inventory
-                player_item_count = await self.db.fetchval(
-                    """
-                    SELECT quantity FROM inventory
-                    WHERE playerid = $1 AND itemid = $2
-                    """, player_id, required_item_id
-                )
-
-                if not player_item_count or player_item_count < required_quantity:
-                    await ctx.send(f"You need {required_quantity} of item ID {required_item_id} to complete this step.", ephemeral=True)
-                    return
-
-                # Remove items from inventory
-                await self.db.execute(
-                    """
-                    UPDATE inventory
-                    SET quantity = quantity - $1
-                    WHERE playerid = $2 AND itemid = $3
-                    """, required_quantity, player_id, required_item_id
-                )
-
-            elif step['requirement_type'] == 'talk':
-                # Assuming the player needs to talk to an NPC; this can be more complex
-                if step['npc_id'] != player_quest['npc_id']:
-                    await ctx.send("You need to talk to a different NPC to complete this step.", ephemeral=True)
-                    return
-
-            # Move to the next step or mark as complete
-            if current_step + 1 >= len(steps):
-                # Mark quest as complete
-                await self.db.execute(
-                    """
-                    UPDATE player_quests
-                    SET status = 'completed'
-                    WHERE player_id = $1 AND quest_id = $2
-                    """, player_id, quest_id
-                )
-                await ctx.send(f"Congratulations! You have completed the quest: {quest['name']}!", ephemeral=True)
-            else:
-                # Increment current step
-                await self.db.execute(
-                    """
-                    UPDATE player_quests
-                    SET current_step = current_step + 1
-                    WHERE player_id = $1 AND quest_id = $2
-                    """, player_id, quest_id
-                )
-                await ctx.send(f"Step {current_step + 1} completed! Move on to the next step.", ephemeral=True)
+           
 
         except Exception as e:
             logging.error(f"Error in turn_in_quest_handler: {e}")
