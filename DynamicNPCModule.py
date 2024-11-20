@@ -43,7 +43,7 @@ class DynamicNPCModule(Extension):
             npc_name = npc_data['name']
 
             logging.info(f"Checking for quests that player_id: {player_id} can turn in at npc_id: {npc_id}")
-            
+
             # Fetch quests that can be turned in at this NPC
             turn_in_quests = await self.db.fetch("""
                 SELECT * FROM player_quests pq
@@ -52,50 +52,71 @@ class DynamicNPCModule(Extension):
                 AND q.turn_in_npc_id = $2
             """, player_id, npc_id)
 
-            if not turn_in_quests:
-                logging.info(f"No quests found for player_id: {player_id} and npc_id: {npc_id} to be turned in.")
-                await ctx.send(f"No quests can be turned in at {npc_name}.", ephemeral=True)
+            if turn_in_quests:
+                for quest in turn_in_quests:
+                    try:
+                        objective = json.loads(quest['objective'])
+                        logging.info(f"Objective for quest {quest['quest_id']}: {objective}")
+
+                        # If objective is 'collect', check player's inventory
+                        if objective['type'] == 'collect':
+                            item_id = objective['item_id']
+                            required_quantity = objective['quantity']
+
+                            # Fetch player's inventory count
+                            player_item_count = await self.db.fetchval("""
+                                SELECT quantity FROM inventory
+                                WHERE playerid = $1 AND itemid = $2
+                            """, player_id, item_id)
+
+                            if player_item_count and player_item_count >= required_quantity:
+                                # Remove items from inventory
+                                await self.db.execute("""
+                                    UPDATE inventory SET quantity = quantity - $1
+                                    WHERE playerid = $2 AND itemid = $3
+                                """, required_quantity, player_id, item_id)
+
+                                # Mark quest as completed
+                                await self.db.execute("""
+                                    UPDATE player_quests
+                                    SET status = 'completed'
+                                    WHERE player_id = $1 AND quest_id = $2
+                                """, player_id, quest['quest_id'])
+
+                                await ctx.send(f"Congratulations! You have completed the quest: {quest['name']}!", ephemeral=True)
+                                return
+
+                    except Exception as e:
+                        logging.error(f"Error parsing objective for quest {quest['quest_id']}: {e}")
+                        await ctx.send("An error occurred while processing quest objectives. Please try again later.", ephemeral=True)
+                        return
+
+            # Check for new quests that can be accepted by the player from this NPC
+            available_quests = await self.db.fetch("""
+                SELECT * FROM quests 
+                WHERE turn_in_npc_id = $1 
+                AND quest_id NOT IN (
+                    SELECT quest_id 
+                    FROM player_quests 
+                    WHERE player_id = $2
+                )
+            """, npc_id, player_id)
+
+            if available_quests:
+                components = []
+                for quest in available_quests:
+                    components.append(
+                        Button(
+                            style=ButtonStyle.PRIMARY,
+                            label=f"Accept quest: {quest['name']}",
+                            custom_id=f"accept_quest|{quest['quest_id']}|{player_id}"
+                        )
+                    )
+                await ctx.send(f"{npc_name} has the following quests available for you:", components=components, ephemeral=True)
                 return
 
-            for quest in turn_in_quests:
-                try:
-                    objective = json.loads(quest['objective'])
-                    logging.info(f"Objective for quest {quest['quest_id']}: {objective}")
-
-                    # If objective is 'collect', check player's inventory
-                    if objective['type'] == 'collect':
-                        item_id = objective['item_id']
-                        required_quantity = objective['quantity']
-
-                        # Fetch player's inventory count
-                        player_item_count = await self.db.fetchval("""
-                            SELECT quantity FROM inventory
-                            WHERE playerid = $1 AND itemid = $2
-                        """, player_id, item_id)
-
-                        if player_item_count and player_item_count >= required_quantity:
-                            # Remove items from inventory
-                            await self.db.execute("""
-                                UPDATE inventory SET quantity = quantity - $1
-                                WHERE playerid = $2 AND itemid = $3
-                            """, required_quantity, player_id, item_id)
-
-                            # Mark quest as completed
-                            await self.db.execute("""
-                                UPDATE player_quests
-                                SET status = 'completed'
-                                WHERE player_id = $1 AND quest_id = $2
-                            """, player_id, quest['quest_id'])
-
-                            await ctx.send(f"Congratulations! You have completed the quest: {quest['name']}!", ephemeral=True)
-                            return
-
-                except Exception as e:
-                    logging.error(f"Error parsing objective for quest {quest['quest_id']}: {e}")
-                    await ctx.send("An error occurred while processing quest objectives. Please try again later.", ephemeral=True)
-                    return
-
-            await ctx.send(f"No quests are ready to be turned in at {npc_name}.", ephemeral=True)
+            # If no quests are ready to be turned in or accepted
+            await ctx.send(f"No quests are ready to be turned in or accepted at {npc_name}.", ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error in npc_dialog_handler: {e}")
@@ -312,42 +333,7 @@ class DynamicNPCModule(Extension):
             logging.error(f"Quest details not found for quest_id: {quest_id}")
             return
     
-        '''steps = json.loads(quest_details['steps'])
-    
-        if current_step < len(steps):
-            step = steps[current_step]
         
-            if step['requirement_type'] == 'collect' and step['item_id'] == item_id:
-                # Update progress
-                progress = quest_data.get('progress', {})
-                current_quantity = progress.get(str(item_id), 0)
-                new_quantity = current_quantity + quantity
-            
-                # Update progress in database
-                progress[str(item_id)] = new_quantity
-                await self.db.execute(
-                    """
-                    UPDATE player_quests SET progress = $1
-                    WHERE player_id = $2 AND quest_id = $3
-                    """, json.dumps(progress), player_id, quest_id
-                )
-
-                # Check if requirement is fulfilled
-                if new_quantity >= step['quantity']:
-                    # Move to next step
-                    await self.db.execute(
-                        """
-                        UPDATE player_quests SET current_step = current_step + 1
-                        WHERE player_id = $1 AND quest_id = $2
-                        """, player_id, quest_id
-                    )
-                    await self.notify_quest_update(player_id, quest_id)
-
-    async def notify_quest_update(self, player_id, quest_id):
-        # Notify player of quest update
-        await self.bot.send_message(
-            player_id, f"Great job! You've completed a step in your quest. Check your quest log for updates!"
-        )'''
 
 
     @component_callback(re.compile(r"^turn_in_quest\|\d+\|\d+$"))
