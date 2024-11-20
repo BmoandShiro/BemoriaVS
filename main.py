@@ -21,6 +21,7 @@ import os
 from Mining import setup as mining_setup
 from Battle_System import setup as battle_system_setup
 from DynamicNPCModule import setup as setup_dynamic_npc
+from Cooking import CookingModule
 
 
 
@@ -78,6 +79,8 @@ mining_setup(bot)
 
 battle_system_setup(bot)
 
+
+bot.cooking_module = CookingModule(bot)
 
 
 
