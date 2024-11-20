@@ -1,5 +1,5 @@
 import asyncio
-from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, component_callback, Embed
+from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, component_callback, Embed, Color
 import random
 import re
 import logging
@@ -17,6 +17,7 @@ class DynamicNPCModule(Extension):
         bot.listen(self.npc_response_handler)
         logging.info("DynamicNPCModule component callbacks registered manually.")
 
+    # Updated code to handle reward items properly and to ensure correct column references
     @component_callback(re.compile(r"^npc_dialog_\d+_\d+$"))
     async def npc_dialog_handler(self, ctx: ComponentContext):
         try:
@@ -84,22 +85,28 @@ class DynamicNPCModule(Extension):
                                 """, player_id, quest['quest_id'])
 
                                 # Reward the player (assuming gold is in the reward_items json)
-                                if quest['reward_items']:
-                                    reward = json.loads(quest['reward_items'])
-                                    if 'gold' in reward:
-                                        gold_amount = reward['gold']
-                                        await self.db.execute("""
-                                            UPDATE player_data
-                                            SET gold_balance = gold_balance + $1
-                                            WHERE playerid = $2
-                                        """, gold_amount, player_id)
+                                reward = json.loads(quest['reward_items']) if quest['reward_items'] else {}
+                                if 'gold' in reward:
+                                    gold_amount = reward['gold']
+                                    await self.db.execute("""
+                                        UPDATE player_data
+                                        SET gold_balance = gold_balance + $1
+                                        WHERE playerid = $2
+                                    """, gold_amount, player_id)
 
-                                    # Grant items if available
-                                    if "items" in reward:
-                                        for item in reward["items"]:
-                                            item_id = item["item_id"]
-                                            quantity = item["quantity"]
-            
+                                reward_items_details = []
+                                # Grant items if available
+                                if "items" in reward:
+                                    for item in reward["items"]:
+                                        item_id = item["item_id"]
+                                        quantity = item["quantity"]
+
+                                        # Fetch item name from the items table
+                                        item_name = await self.db.fetchval("""
+                                            SELECT name FROM items WHERE itemid = $1
+                                        """, item_id)
+                                    
+                                        if item_name:
                                             # Update player's inventory with rewarded items
                                             await self.db.execute("""
                                                 INSERT INTO inventory (playerid, itemid, quantity)
@@ -108,8 +115,25 @@ class DynamicNPCModule(Extension):
                                                 SET quantity = inventory.quantity + EXCLUDED.quantity
                                             """, player_id, item_id, quantity)
 
-                                await ctx.send(f"Congratulations! You have completed the quest: {quest['name']} and received your rewards!", ephemeral=True)
+                                            # Append item detail for the embed
+                                            reward_items_details.append(f"{quantity} x {item_name}")
 
+                                # Embed for successful quest completion
+                                embed = Embed(
+                                    title="Quest Completed!",
+                                    description=f"**{quest['name']}**\nYou have successfully completed the quest and received your rewards!",
+                                    color=0x00FF00  # Green color for success
+                                )
+                                embed.set_author(name=f"{ctx.author.display_name}", icon_url=ctx.author.avatar_url)
+
+                                if 'gold' in reward:
+                                    embed.add_field(name="Gold Earned", value=f"{reward['gold']} gold")
+
+                                if reward_items_details:
+                                    items_str = "\n".join(reward_items_details)
+                                    embed.add_field(name="Items Received", value=items_str)
+
+                                await ctx.send(embeds=[embed], ephemeral=True)
 
                     except Exception as e:
                         logging.error(f"Error parsing objective for quest {quest['quest_id']}: {e}")
@@ -137,7 +161,19 @@ class DynamicNPCModule(Extension):
                             custom_id=f"accept_quest|{quest['quest_id']}|{player_id}"
                         )
                     )
-                await ctx.send(f"{npc_name} has the following quests available for you:", components=components, ephemeral=True)
+            
+                # Embed for available quests
+                embed = Embed(
+                    title=f"Quests Available from {npc_name}",
+                    description="These are the quests you can accept:",
+                    color=0xFFCC00  # Gold color for new quests
+                )
+                embed.set_author(name=f"{ctx.author.display_name}", icon_url=ctx.author.avatar_url)
+
+                for quest in available_quests:
+                    embed.add_field(name=quest['name'], value=quest['description'], inline=False)
+
+                await ctx.send(embeds=[embed], components=components, ephemeral=True)
                 return
 
             # If no quests are ready to be turned in or accepted
@@ -146,8 +182,6 @@ class DynamicNPCModule(Extension):
         except Exception as e:
             logging.error(f"Error in npc_dialog_handler: {e}")
             await ctx.send("An error occurred while interacting with the NPC. Please try again later.", ephemeral=True)
-
-
 
 
 
@@ -294,7 +328,14 @@ class DynamicNPCModule(Extension):
 
             # Send confirmation message to the player
             quest_name = quest['name']  # Corrected to use the 'name' column
-            await ctx.send(f"You have accepted the quest: {quest_name}!", ephemeral=True)
+            embed = Embed(
+                title="New Quest Acquired!",
+                description=f"**{quest['name']}**\n{quest['description']}",
+                color=Color.from_hex("#FFCC00")  # Gold color to indicate new quest
+            )
+            embed.set_author(name=f"{ctx.author.display_name}", icon_url=ctx.author.avatar_url)
+
+            await ctx.send(embeds=[embed], ephemeral=True)
 
         except ValueError as ve:
             logging.error(f"ValueError in accept_quest_handler: {ve}")
