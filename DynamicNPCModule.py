@@ -83,8 +83,33 @@ class DynamicNPCModule(Extension):
                                     WHERE player_id = $1 AND quest_id = $2
                                 """, player_id, quest['quest_id'])
 
-                                await ctx.send(f"Congratulations! You have completed the quest: {quest['name']}!", ephemeral=True)
-                                return
+                                # Reward the player (assuming gold is in the reward_items json)
+                                if quest['reward_items']:
+                                    reward = json.loads(quest['reward_items'])
+                                    if 'gold' in reward:
+                                        gold_amount = reward['gold']
+                                        await self.db.execute("""
+                                            UPDATE player_data
+                                            SET gold_balance = gold_balance + $1
+                                            WHERE playerid = $2
+                                        """, gold_amount, player_id)
+
+                                    # Grant items if available
+                                    if "items" in reward:
+                                        for item in reward["items"]:
+                                            item_id = item["item_id"]
+                                            quantity = item["quantity"]
+            
+                                            # Update player's inventory with rewarded items
+                                            await self.db.execute("""
+                                                INSERT INTO inventory (playerid, itemid, quantity)
+                                                VALUES ($1, $2, $3)
+                                                ON CONFLICT (playerid, itemid) DO UPDATE
+                                                SET quantity = inventory.quantity + EXCLUDED.quantity
+                                            """, player_id, item_id, quantity)
+
+                                await ctx.send(f"Congratulations! You have completed the quest: {quest['name']} and received your rewards!", ephemeral=True)
+
 
                     except Exception as e:
                         logging.error(f"Error parsing objective for quest {quest['quest_id']}: {e}")
@@ -121,6 +146,8 @@ class DynamicNPCModule(Extension):
         except Exception as e:
             logging.error(f"Error in npc_dialog_handler: {e}")
             await ctx.send("An error occurred while interacting with the NPC. Please try again later.", ephemeral=True)
+
+
 
 
 
