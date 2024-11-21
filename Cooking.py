@@ -169,49 +169,55 @@ class CookingModule(Extension):
 
 
     async def prompt_for_ingredient_selection(self, ctx, player_id, dish_itemid, ingredients_to_select):
-        # For each ingredient that requires selection, prompt the user to choose
-        for ingredient, inventory_items, quantity_required in ingredients_to_select:
-            if ingredient == "any":  # Identify that any fish can be used
-                # Fetch caught fish from the player's inventory only
-                caught_fish_in_inventory = await self.db.fetch("""
-                    SELECT cf.id, cf.fish_name 
-                    FROM caught_fish cf
-                    JOIN inventory i ON cf.id = i.caught_fish_id
-                    WHERE i.playerid = $1
-                """, player_id)
+        try:
+            logging.info(f"Prompting for ingredient selection for player ID: {player_id}, dish_itemid: {dish_itemid}.")
+            logging.info(f"Ingredients to select: {ingredients_to_select}")
 
-                # Limit the number of caught fish options to a maximum of 25
-                limited_fish_items = caught_fish_in_inventory[:25]
+            for ingredient, inventory_items, quantity_required in ingredients_to_select:
+                logging.info(f"Processing ingredient: {ingredient}, Quantity Required: {quantity_required}")
 
-                options = [
-                    StringSelectOption(label=f"{fish['fish_name']} (ID: {fish['id']})", value=str(fish['id']))
-                    for fish in limited_fish_items
-                ]
-                ingredient_name = "Any Caught Fish"
-                custom_id = f"ingredient_fish_select_{dish_itemid}_any_{player_id}"
-                logging.info(f"Generated custom ID for 'any fish' selection: {custom_id}")
+                if ingredient == "any":
+                    caught_fish_in_inventory = await self.db.fetch("""
+                        SELECT cf.id, cf.fish_name 
+                        FROM caught_fish cf
+                        JOIN inventory i ON cf.id = i.caught_fish_id
+                        WHERE i.playerid = $1
+                    """, player_id)
 
-            else:
-                # Standard item selection
-                limited_inventory_items = inventory_items[:25]  # Limit options to 25
-                options = [
-                    StringSelectOption(label=f"{await self.get_item_name(item['itemid'])} (Qty: {item['quantity']})", value=str(item['inventoryid']))
-                    for item in limited_inventory_items
-                ]
-                ingredient_name = await self.get_item_name(ingredient)
-                custom_id = f"ingredient_select_{dish_itemid}_{ingredient}_{player_id}"
-                logging.info(f"Generated custom ID for standard selection: {custom_id}")
+                    logging.info(f"Caught fish available for selection: {caught_fish_in_inventory}")
+                    limited_fish_items = caught_fish_in_inventory[:25]
 
-            # Create a string select menu for ingredient selection
-            select_menu = StringSelectMenu(
-                custom_id=custom_id,
-                placeholder=f"Select {quantity_required}x {ingredient_name} to use"
-            )
-            select_menu.options.extend(options)
-            logging.info(f"Sending selection menu with custom_id: {select_menu.custom_id}")
-            # Send the menu to the user and wait for selection
-            await ctx.send(components=[select_menu], ephemeral=True)
+                    options = [
+                        StringSelectOption(label=f"{fish['fish_name']} (ID: {fish['id']})", value=str(fish['id']))
+                        for fish in limited_fish_items
+                    ]
+                    ingredient_name = "Any Caught Fish"
+                    custom_id = f"ingredient_fish_select_{dish_itemid}_any_{player_id}"  # Ensure "fish_select" is used
+                    logging.info(f"Generated custom ID for 'any fish' selection: {custom_id}")
 
+                else:
+                    limited_inventory_items = inventory_items[:25]
+                    options = [
+                        StringSelectOption(label=f"{await self.get_item_name(item['itemid'])} (Qty: {item['quantity']})", value=str(item['inventoryid']))
+                        for item in limited_inventory_items
+                    ]
+                    ingredient_name = await self.get_item_name(ingredient)
+                    custom_id = f"ingredient_select_{dish_itemid}_{ingredient}_{player_id}"
+                    logging.info(f"Generated custom ID for standard selection: {custom_id}")
+
+                logging.debug(f"Custom ID: {custom_id}, Options: {[option.label for option in options]}")
+
+                select_menu = StringSelectMenu(
+                    custom_id=custom_id,
+                    placeholder=f"Select {quantity_required}x {ingredient_name} to use"
+                )
+                select_menu.options.extend(options)
+                logging.info(f"Sending selection menu with custom_id: {select_menu.custom_id}")
+
+                await ctx.send(components=[select_menu], ephemeral=True)
+
+        except Exception as e:
+            logging.error(f"Error in prompt_for_ingredient_selection: {e}")
 
 
 
@@ -219,131 +225,107 @@ class CookingModule(Extension):
     @component_callback(re.compile(r"^ingredient_(select|fish_select)_\d+(_any|_\w+)_\d+$"))
     async def ingredient_select_handler(self, ctx: ComponentContext):
         try:
-            # Split the custom ID to determine the relevant action
             parts = ctx.custom_id.split("_")
+            logging.info(f"Custom ID parts: {parts}")
 
-            if len(parts) == 6:  # Updated to match the six-part structure
-                # Format for "any fish" (ingredient, fish, select, dish_itemid, any, player_id)
+            if len(parts) == 6:
                 _, ingredient_type, _, dish_itemid, _, player_id = parts
+                player_id = int(player_id)
                 ingredient_id = "any"
             elif len(parts) == 5:
-                # Format for normal items (ingredient, ingredient_type, dish_itemid, ingredient_id, player_id)
                 _, ingredient_type, dish_itemid, ingredient_id, player_id = parts
+                player_id = int(player_id)
             else:
                 await ctx.send("Invalid ingredient selection.", ephemeral=True)
                 logging.error(f"Invalid custom ID format: {ctx.custom_id}")
                 return
 
-            # Log the received custom ID to help with debugging
-            logging.info(f"Custom ID received in ingredient_select_handler: {ctx.custom_id}")
-            logging.info(f"Custom ID split into parts: {parts}")
+            selected_id = int(ctx.values[0])
+            logging.info(f"Selected ID: {selected_id}, Ingredient Type: {ingredient_type}, Player ID: {player_id}")
 
-            # Extract the selected inventory ID from the dropdown selection
-            try:
-                selected_inventory_id = int(ctx.values[0])
-            except (ValueError, IndexError) as e:
-                logging.error(f"Error extracting inventory ID from ctx.values: {ctx.values}, Error: {e}")
-                await ctx.send("Invalid ingredient selection.", ephemeral=True)
-                return
+            if ingredient_type == "fish":
+                logging.info(f"Attempting to delete caught fish with ID: {selected_id} for player ID: {player_id}")
+                await self.delete_ingredient(caught_fish_id=selected_id, player_id=player_id)
+            else:
+                logging.info(f"Ingredient type does not match 'fish_select'. Skipping deletion. Ingredient type: {ingredient_type}")
 
-            logging.info(f"Selected inventory ID: {selected_inventory_id}")
-
-            if ingredient_type == "select":
-                # Update the inventory to reduce the selected item's quantity
-                await self.db.execute("""
-                    UPDATE inventory
-                    SET quantity = quantity - 1
-                    WHERE inventoryid = $1
-                """, selected_inventory_id)
-
-                # If the quantity becomes 0, remove the inventory entry
-                await self.db.execute("""
-                    DELETE FROM inventory
-                    WHERE inventoryid = $1 AND quantity <= 0
-                """, selected_inventory_id)
-
-                logging.info(f"Standard ingredient with inventory ID {selected_inventory_id} updated or removed.")
-
-            elif ingredient_type == "fish_select":
-                # The selected inventory ID is actually the caught_fish_id
-                caught_fish_id = selected_inventory_id
-
-                # Fetch the corresponding inventory entry that contains the caught fish ID
-                inventory_entry = await self.db.fetchrow("""
-                    SELECT inventoryid FROM inventory
-                    WHERE caught_fish_id = $1 AND playerid = $2
-                """, caught_fish_id, player_id)
-
-                if inventory_entry:
-                    inventory_id = inventory_entry['inventoryid']
-
-                    # Remove the inventory entry associated with this caught fish
-                    await self.db.execute("""
-                        DELETE FROM inventory
-                        WHERE inventoryid = $1
-                    """, inventory_id)
-
-                    logging.info(f"Inventory entry with inventory ID {inventory_id} removed for caught fish ID {caught_fish_id}.")
-
-                # Remove the caught fish from the caught_fish table
-                await self.db.execute("""
-                    DELETE FROM caught_fish
-                    WHERE id = $1
-                """, caught_fish_id)
-
-                logging.info(f"Caught fish with ID {caught_fish_id} removed from caught_fish table.")
-
-            # Recheck if all ingredients have been selected
             recipe = await self.db.fetchrow("""
                 SELECT * FROM recipes WHERE dish_itemid = $1
             """, int(dish_itemid))
-
             if not recipe:
                 await ctx.send("Recipe not found for this dish.", ephemeral=True)
+                logging.error(f"Recipe with dish_itemid {dish_itemid} not found.")
                 return
 
-            # Gather information about remaining ingredients that need to be selected
+            logging.info(f"Recipe details: {recipe}")
+
             ingredients_to_select = []
             for i in range(1, 7):
                 ingredient_id = recipe[f'ingredient{i}_itemid']
                 quantity_required = recipe[f'quantity{i}_required']
                 caught_fish_name = recipe.get(f'caught_fish_name{i}')
 
-                if ingredient_id is not None and quantity_required is not None:
-                    # Check in inventory for standard items
+                logging.info(f"Checking ingredient {i}: ingredient_id={ingredient_id}, quantity_required={quantity_required}, caught_fish_name={caught_fish_name}")
+
+                if ingredient_id and quantity_required:
                     inventory_items = await self.db.fetch("""
-                        SELECT inventoryid, itemid, quantity FROM inventory
+                        SELECT inventoryid, quantity FROM inventory
                         WHERE playerid = $1 AND itemid = $2
                     """, player_id, ingredient_id)
-
                     if inventory_items:
                         ingredients_to_select.append((ingredient_id, inventory_items, quantity_required))
 
-                elif caught_fish_name and caught_fish_name.lower() == "any" and quantity_required is not None:
-                    # Check in caught_fish table for any fish
+                elif caught_fish_name and caught_fish_name.lower() == "any" and quantity_required:
                     caught_fish_items = await self.db.fetch("""
                         SELECT id, fish_name FROM caught_fish
                         WHERE player_id = $1
                     """, player_id)
-
                     if len(caught_fish_items) >= quantity_required:
                         ingredients_to_select.append(("any", caught_fish_items, quantity_required))
 
             if ingredients_to_select:
-                # Prompt for the next ingredient selection if there are still ingredients to choose
                 await self.prompt_for_ingredient_selection(ctx, player_id, dish_itemid, ingredients_to_select)
             else:
-                # All selections are made, finalize the cooking
-                result = await self.finalize_cooking(int(player_id), recipe)
-                await ctx.send(result, ephemeral=True)
+                logging.info(f"All ingredients selected for recipe {dish_itemid}. Finalizing cooking...")
+                await self.finalize_cooking(player_id, recipe)
+                await ctx.send(f"You have successfully cooked {await self.get_item_name(recipe['dish_itemid'])}!", ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error in ingredient_select_handler: {e}")
-            await ctx.send("An error occurred while processing your request. Please try again.", ephemeral=True)
 
 
 
 
+
+
+
+    async def delete_ingredient(self, caught_fish_id: int, player_id: int):
+        try:
+            logging.info(f"Deleting inventory entry for caught_fish_id={caught_fish_id}, player_id={player_id}")
+
+            # Delete inventory entry
+            inventory_entry = await self.db.fetchrow("""
+                SELECT inventoryid
+                FROM inventory
+                WHERE caught_fish_id = $1 AND playerid = $2
+            """, caught_fish_id, player_id)
+
+            if inventory_entry:
+                inventory_id = inventory_entry['inventoryid']
+                await self.db.execute("""
+                    DELETE FROM inventory
+                    WHERE inventoryid = $1
+                """, inventory_id)
+                logging.info(f"Deleted inventory entry with inventoryid={inventory_id} for caught_fish_id={caught_fish_id}")
+
+            # Delete caught fish entry
+            await self.db.execute("""
+                DELETE FROM caught_fish
+                WHERE id = $1
+            """, caught_fish_id)
+            logging.info(f"Deleted caught fish with id={caught_fish_id}")
+        except Exception as e:
+            logging.error(f"Error deleting ingredient: {e}")
 
 
 
@@ -370,14 +352,22 @@ class CookingModule(Extension):
 
             # Update cooking XP
             xp_gained = recipe['cooking_xp_gained']
-            await self.add_cooking_xp(player_id, xp_gained)
+            await self.db.execute("""
+                UPDATE player_skills_xp
+                SET cooking_xp = cooking_xp + $1
+                WHERE playerid = $2
+            """, xp_gained, player_id)
 
+            # Log success and notify the user
             dish_name = await self.get_item_name(dish_itemid)
+            logging.info(f"Successfully cooked {dish_name} for player ID {player_id}.")
             return f"You have successfully cooked {dish_name}!"
 
         except Exception as e:
             logging.error(f"Error in finalize_cooking: {e}")
             return "An error occurred while finalizing the cooking process. Please try again."
+
+
 
 
     async def add_cooking_xp(self, player_id, xp_gained):
