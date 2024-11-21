@@ -86,41 +86,10 @@ class CookingModule(Extension):
         selected_recipe_id = int(ctx.values[0])
         player_id = await self.db.get_or_create_player(ctx.author.id)
 
-        # Attempt to cook the selected dish using the recipes available to the player
-        compatible_recipes = await self.get_recipes_from_ingredients(player_id)
+        # Call the attempt_cook_dish method to handle the entire cooking process
+        result = await self.attempt_cook_dish(player_id, selected_recipe_id)
+        await ctx.send(result, ephemeral=True)
 
-        # Check if the selected recipe is available to cook
-        recipe = next((r for r in compatible_recipes if r['dish_itemid'] == selected_recipe_id), None)
-        if not recipe:
-            await ctx.send("You no longer have the required ingredients for this recipe.", ephemeral=True)
-            return
-
-        # Proceed with cooking if all requirements are met
-        for i in range(1, 7):
-            ingredient_id = recipe[f'ingredient{i}_itemid']
-            quantity_required = recipe[f'quantity{i}_required']
-
-            if ingredient_id is not None and quantity_required is not None:
-                await self.db.execute("""
-                    UPDATE inventory
-                    SET quantity = quantity - $1
-                    WHERE playerid = $2 AND itemid = $3
-                """, quantity_required, player_id, ingredient_id)
-
-        # Add the cooked dish to inventory
-        await self.db.execute("""
-            INSERT INTO inventory (playerid, itemid, quantity, isequipped)
-            VALUES ($1, $2, 1, FALSE)
-        """, player_id, selected_recipe_id)
-
-        # Update cooking XP
-        xp_gained = recipe['cooking_xp_gained']
-        await self.add_cooking_xp(player_id, xp_gained)
-
-        dish_name = await self.get_item_name(selected_recipe_id)
-        return_message = f"You have successfully cooked {dish_name}!"
-        await ctx.send(return_message, ephemeral=True)
-        
     async def attempt_cook_dish(self, player_id, dish_itemid):
         # Get recipe details
         compatible_recipes = await self.get_recipes_from_ingredients(player_id)
@@ -181,8 +150,6 @@ class CookingModule(Extension):
 
         dish_name = await self.get_item_name(dish_itemid)
         return f"You have successfully cooked {dish_name}!"
-
-
 
     async def add_cooking_xp(self, player_id, xp_gained):
         await self.db.execute("""
