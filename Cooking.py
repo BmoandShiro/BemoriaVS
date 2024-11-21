@@ -41,7 +41,7 @@ class CookingModule(Extension):
             for i in range(1, 7):
                 ingredient_id = recipe[f'ingredient{i}_itemid']
                 quantity_required = recipe[f'quantity{i}_required']
-                is_any_fish = recipe.get(f'ingredient{i}_is_any_fish', False)  # Assuming this field indicates if "any fish" is allowed
+                is_any = recipe.get(f'ingredient{i}_is_any', False)  # Assuming this field indicates if "any fish" is allowed
 
                 if ingredient_id is not None and quantity_required is not None:
                     # Check in inventory for standard items
@@ -50,7 +50,7 @@ class CookingModule(Extension):
                         all_ingredients_available = False
                         break
 
-                elif is_any_fish and quantity_required is not None:
+                elif is_any and quantity_required is not None:
                     # Check if the total number of caught fish is enough
                     if total_fish_count < quantity_required:
                         all_ingredients_available = False
@@ -146,7 +146,7 @@ class CookingModule(Extension):
                     """, player_id)
 
                     if len(caught_fish_items) >= 1:
-                        ingredients_to_select.append(("any_fish", caught_fish_items, 1))  # Quantity is always 1 for each caught fish
+                        ingredients_to_select.append(("any", caught_fish_items, 1))  # Quantity is always 1 for each caught fish
 
             # Debug log to check ingredients to select
             logging.info(f"Ingredients to select for recipe {selected_recipe_id}: {ingredients_to_select}")
@@ -171,7 +171,7 @@ class CookingModule(Extension):
     async def prompt_for_ingredient_selection(self, ctx, player_id, dish_itemid, ingredients_to_select):
         # For each ingredient that requires selection, prompt the user to choose
         for ingredient, inventory_items, quantity_required in ingredients_to_select:
-            if ingredient == "any_fish":  # Identify that any fish can be used
+            if ingredient == "any":  # Identify that any fish can be used
                 # Fetch caught fish from the player's inventory only
                 caught_fish_in_inventory = await self.db.fetch("""
                     SELECT cf.id, cf.fish_name 
@@ -213,22 +213,29 @@ class CookingModule(Extension):
 
 
 
-    @component_callback(re.compile(r"^ingredient_(select|fish_select)_\d+_\w+_\d+$"))
+    @component_callback(re.compile(r"^ingredient_(select|fish_select)_\d+(_any|_\w+)_\d+$"))
     async def ingredient_select_handler(self, ctx: ComponentContext):
         try:
             # Split the custom ID to determine the relevant action
             parts = ctx.custom_id.split("_")
+        
             if len(parts) == 5:
+                # Format for normal items (ingredient_type, dish_itemid, ingredient_id, player_id)
                 _, ingredient_type, dish_itemid, ingredient_id, player_id = parts
             elif len(parts) == 4:
-                # Assuming it's the format for "any fish"
+                # Format for "any fish" items (ingredient_type, dish_itemid, player_id)
                 _, ingredient_type, dish_itemid, player_id = parts
-                ingredient_id = "any_fish"
+                ingredient_id = "any"
             else:
                 await ctx.send("Invalid ingredient selection.", ephemeral=True)
                 return
 
+            # Log the received custom ID to help with debugging
+            logging.info(f"Custom ID received in ingredient_select_handler: {ctx.custom_id}")
+
+            # Extract the selected inventory ID from the dropdown selection
             selected_inventory_id = int(ctx.values[0])
+            logging.info(f"Selected inventory ID: {selected_inventory_id}")
 
             if ingredient_type == "select":
                 # Update the inventory to reduce the selected item's quantity
@@ -244,12 +251,16 @@ class CookingModule(Extension):
                     WHERE inventoryid = $1 AND quantity <= 0
                 """, selected_inventory_id)
 
+                logging.info(f"Standard ingredient with inventory ID {selected_inventory_id} updated or removed.")
+
             elif ingredient_type == "fish_select":
-                # Remove the selected fish from caught_fish table
+                # Remove the selected fish from the caught_fish table
                 await self.db.execute("""
                     DELETE FROM caught_fish
                     WHERE id = $1
                 """, selected_inventory_id)
+
+                logging.info(f"Caught fish with ID {selected_inventory_id} removed from caught_fish table.")
 
             # Recheck if all ingredients have been selected
             recipe = await self.db.fetchrow("""
@@ -263,9 +274,9 @@ class CookingModule(Extension):
             # Gather information about remaining ingredients that need to be selected
             ingredients_to_select = []
             for i in range(1, 7):
-                ingredient_id = recipe.get(f'ingredient{i}_itemid')
-                quantity_required = recipe.get(f'quantity{i}_required')
-                caught_fish_name = recipe.get(f'caught_fish_name{i}')
+                ingredient_id = recipe[f'ingredient{i}_itemid']
+                quantity_required = recipe[f'quantity{i}_required']
+                caught_fish_name = recipe.get(f'caught_fish_name{i}')  # Assuming caught_fish_name{i} is used to identify fish requirements
 
                 if ingredient_id is not None and quantity_required is not None:
                     # Check in inventory for standard items
@@ -285,7 +296,7 @@ class CookingModule(Extension):
                     """, player_id)
 
                     if len(caught_fish_items) >= quantity_required:
-                        ingredients_to_select.append(("any_fish", caught_fish_items, quantity_required))
+                        ingredients_to_select.append(("any", caught_fish_items, quantity_required))
 
             if ingredients_to_select:
                 # Prompt for the next ingredient selection if there are still ingredients to choose
@@ -298,6 +309,10 @@ class CookingModule(Extension):
         except Exception as e:
             logging.error(f"Error in ingredient_select_handler: {e}")
             await ctx.send("An error occurred while processing your request. Please try again.", ephemeral=True)
+
+
+
+
 
 
 
