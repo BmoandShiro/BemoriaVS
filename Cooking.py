@@ -188,7 +188,9 @@ class CookingModule(Extension):
                     for fish in limited_fish_items
                 ]
                 ingredient_name = "Any Caught Fish"
-                custom_id = f"ingredient_fish_select_{dish_itemid}_anyfish_{player_id}"
+                custom_id = f"ingredient_fish_select_{dish_itemid}_any_{player_id}"
+                logging.info(f"Generated custom ID for 'any fish' selection: {custom_id}")
+
             else:
                 # Standard item selection
                 limited_inventory_items = inventory_items[:25]  # Limit options to 25
@@ -198,6 +200,7 @@ class CookingModule(Extension):
                 ]
                 ingredient_name = await self.get_item_name(ingredient)
                 custom_id = f"ingredient_select_{dish_itemid}_{ingredient}_{player_id}"
+                logging.info(f"Generated custom ID for standard selection: {custom_id}")
 
             # Create a string select menu for ingredient selection
             select_menu = StringSelectMenu(
@@ -205,7 +208,7 @@ class CookingModule(Extension):
                 placeholder=f"Select {quantity_required}x {ingredient_name} to use"
             )
             select_menu.options.extend(options)
-
+            logging.info(f"Sending selection menu with custom_id: {select_menu.custom_id}")
             # Send the menu to the user and wait for selection
             await ctx.send(components=[select_menu], ephemeral=True)
 
