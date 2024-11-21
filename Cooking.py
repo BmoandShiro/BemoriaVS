@@ -222,22 +222,30 @@ class CookingModule(Extension):
             # Split the custom ID to determine the relevant action
             parts = ctx.custom_id.split("_")
         
-            if len(parts) == 5:
-                # Format for normal items (ingredient_type, dish_itemid, ingredient_id, player_id)
-                _, ingredient_type, dish_itemid, ingredient_id, player_id = parts
-            elif len(parts) == 4:
-                # Format for "any fish" items (ingredient_type, dish_itemid, player_id)
-                _, ingredient_type, dish_itemid, player_id = parts
+            if len(parts) == 6:  # Updated to match the six-part structure
+                # Format for "any fish" (ingredient, fish, select, dish_itemid, any, player_id)
+                _, ingredient_type, _, dish_itemid, _, player_id = parts
                 ingredient_id = "any"
+            elif len(parts) == 5:
+                # Format for normal items (ingredient, ingredient_type, dish_itemid, ingredient_id, player_id)
+                _, ingredient_type, dish_itemid, ingredient_id, player_id = parts
             else:
                 await ctx.send("Invalid ingredient selection.", ephemeral=True)
+                logging.error(f"Invalid custom ID format: {ctx.custom_id}")
                 return
 
             # Log the received custom ID to help with debugging
             logging.info(f"Custom ID received in ingredient_select_handler: {ctx.custom_id}")
+            logging.info(f"Custom ID split into parts: {parts}")
 
             # Extract the selected inventory ID from the dropdown selection
-            selected_inventory_id = int(ctx.values[0])
+            try:
+                selected_inventory_id = int(ctx.values[0])
+            except (ValueError, IndexError) as e:
+                logging.error(f"Error extracting inventory ID from ctx.values: {ctx.values}, Error: {e}")
+                await ctx.send("Invalid ingredient selection.", ephemeral=True)
+                return
+
             logging.info(f"Selected inventory ID: {selected_inventory_id}")
 
             if ingredient_type == "select":
@@ -279,7 +287,7 @@ class CookingModule(Extension):
             for i in range(1, 7):
                 ingredient_id = recipe[f'ingredient{i}_itemid']
                 quantity_required = recipe[f'quantity{i}_required']
-                caught_fish_name = recipe.get(f'caught_fish_name{i}')  # Assuming caught_fish_name{i} is used to identify fish requirements
+                caught_fish_name = recipe.get(f'caught_fish_name{i}')
 
                 if ingredient_id is not None and quantity_required is not None:
                     # Check in inventory for standard items
@@ -312,7 +320,6 @@ class CookingModule(Extension):
         except Exception as e:
             logging.error(f"Error in ingredient_select_handler: {e}")
             await ctx.send("An error occurred while processing your request. Please try again.", ephemeral=True)
-
 
 
 
