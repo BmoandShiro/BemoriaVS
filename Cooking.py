@@ -1,6 +1,7 @@
 from interactions import SlashContext, Extension, component_callback, ComponentContext
 import logging
 import asyncio
+import re
 
 class CookingModule(Extension):
     def __init__(self, bot):
@@ -108,8 +109,9 @@ class CookingModule(Extension):
             WHERE playerid = $2
         """, xp_gained, player_id)
 
-    @component_callback("cook_button")
+    @component_callback(re.compile(r"^cook_\d+$"))
     async def cook_button_handler(self, ctx: ComponentContext):
+        logging.info("Cook button pressed.")
         await ctx.defer(ephemeral=True)
         player_id = await self.db.get_or_create_player(ctx.author.id)
 
