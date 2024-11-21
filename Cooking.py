@@ -221,7 +221,7 @@ class CookingModule(Extension):
         try:
             # Split the custom ID to determine the relevant action
             parts = ctx.custom_id.split("_")
-        
+
             if len(parts) == 6:  # Updated to match the six-part structure
                 # Format for "any fish" (ingredient, fish, select, dish_itemid, any, player_id)
                 _, ingredient_type, _, dish_itemid, _, player_id = parts
@@ -265,13 +265,33 @@ class CookingModule(Extension):
                 logging.info(f"Standard ingredient with inventory ID {selected_inventory_id} updated or removed.")
 
             elif ingredient_type == "fish_select":
-                # Remove the selected fish from the caught_fish table
+                # The selected inventory ID is actually the caught_fish_id
+                caught_fish_id = selected_inventory_id
+
+                # Fetch the corresponding inventory entry that contains the caught fish ID
+                inventory_entry = await self.db.fetchrow("""
+                    SELECT inventoryid FROM inventory
+                    WHERE caught_fish_id = $1 AND playerid = $2
+                """, caught_fish_id, player_id)
+
+                if inventory_entry:
+                    inventory_id = inventory_entry['inventoryid']
+
+                    # Remove the inventory entry associated with this caught fish
+                    await self.db.execute("""
+                        DELETE FROM inventory
+                        WHERE inventoryid = $1
+                    """, inventory_id)
+
+                    logging.info(f"Inventory entry with inventory ID {inventory_id} removed for caught fish ID {caught_fish_id}.")
+
+                # Remove the caught fish from the caught_fish table
                 await self.db.execute("""
                     DELETE FROM caught_fish
                     WHERE id = $1
-                """, selected_inventory_id)
+                """, caught_fish_id)
 
-                logging.info(f"Caught fish with ID {selected_inventory_id} removed from caught_fish table.")
+                logging.info(f"Caught fish with ID {caught_fish_id} removed from caught_fish table.")
 
             # Recheck if all ingredients have been selected
             recipe = await self.db.fetchrow("""
@@ -327,57 +347,38 @@ class CookingModule(Extension):
 
 
 
-
     async def finalize_cooking(self, player_id, recipe):
-        # Proceed with cooking if all requirements are met
-        for i in range(1, 7):
-            ingredient_id = recipe[f'ingredient{i}_itemid']
-            fish_name_required = recipe.get(f'ingredient{i}_fish_name')  # Adjust for fish name
-            quantity_required = recipe[f'quantity{i}_required']
-
-            if ingredient_id is not None and quantity_required is not None:
-                await self.db.execute("""
-                    UPDATE inventory
-                    SET quantity = quantity - $1
-                    WHERE playerid = $2 AND itemid = $3
-                """, quantity_required, player_id, ingredient_id)
-
-            elif fish_name_required is not None and quantity_required is not None:
-                # Delete or update caught fish entries
-                await self.db.execute("""
-                    DELETE FROM caught_fish
-                    WHERE player_id = $1 AND fish_name = $2
-                    LIMIT $3
-                """, player_id, fish_name_required, quantity_required)
-
-   
-
-
-        # Add the cooked dish to inventory
-        dish_itemid = recipe['dish_itemid']
-        existing_quantity = await self.db.fetchval("""
-            SELECT quantity FROM inventory
-            WHERE playerid = $1 AND itemid = $2
-        """, player_id, dish_itemid)
-
-        if existing_quantity is not None:
-            await self.db.execute("""
-                UPDATE inventory
-                SET quantity = quantity + 1
+        try:
+            # Add the cooked dish to inventory
+            dish_itemid = recipe['dish_itemid']
+            existing_quantity = await self.db.fetchval("""
+                SELECT quantity FROM inventory
                 WHERE playerid = $1 AND itemid = $2
             """, player_id, dish_itemid)
-        else:
-            await self.db.execute("""
-                INSERT INTO inventory (playerid, itemid, quantity, isequipped)
-                VALUES ($1, $2, 1, FALSE)
-            """, player_id, dish_itemid)
 
-        # Update cooking XP
-        xp_gained = recipe['cooking_xp_gained']
-        await self.add_cooking_xp(player_id, xp_gained)
+            if existing_quantity is not None:
+                await self.db.execute("""
+                    UPDATE inventory
+                    SET quantity = quantity + 1
+                    WHERE playerid = $1 AND itemid = $2
+                """, player_id, dish_itemid)
+            else:
+                await self.db.execute("""
+                    INSERT INTO inventory (playerid, itemid, quantity, isequipped)
+                    VALUES ($1, $2, 1, FALSE)
+                """, player_id, dish_itemid)
 
-        dish_name = await self.get_item_name(dish_itemid)
-        return f"You have successfully cooked {dish_name}!"
+            # Update cooking XP
+            xp_gained = recipe['cooking_xp_gained']
+            await self.add_cooking_xp(player_id, xp_gained)
+
+            dish_name = await self.get_item_name(dish_itemid)
+            return f"You have successfully cooked {dish_name}!"
+
+        except Exception as e:
+            logging.error(f"Error in finalize_cooking: {e}")
+            return "An error occurred while finalizing the cooking process. Please try again."
+
 
     async def add_cooking_xp(self, player_id, xp_gained):
         await self.db.execute("""
