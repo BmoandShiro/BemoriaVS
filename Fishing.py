@@ -121,7 +121,7 @@ class FishingModule:
         caught_fish = self.roll_for_fish(fish_list, rarity)
     
         if not caught_fish:
-            return "No fish matched the rolled rarity."
+            return "No fish caught."
 
         length = random.uniform(float(caught_fish['minlength']), float(caught_fish['maxlength']))
         weight = random.uniform(float(caught_fish['minweight']), float(caught_fish['maxweight']))
