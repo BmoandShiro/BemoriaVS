@@ -22,7 +22,7 @@ from Mining import setup as mining_setup
 from Battle_System import setup as battle_system_setup
 from DynamicNPCModule import setup as setup_dynamic_npc
 from Cooking import setup as cooking_setup
-
+from Cauldron import setup as cauldron_setup
 
 
 
@@ -83,6 +83,7 @@ battle_system_setup(bot)
 
 cooking_setup(bot)
 
+cauldron_setup(bot)
 
 
 
