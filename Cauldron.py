@@ -123,11 +123,8 @@ class CauldronModule(Extension):
 
     @component_callback(re.compile(r"^cauldron_view_\d+$"))
     async def view_cauldron_handler(self, ctx: ComponentContext):
-        """
-        Handle viewing the cauldron content.
-        """
         try:
-            # Fetch player_id using discord_id
+            # Fetch player_id using discordid
             player_id = await self.get_player_id(ctx.author.id)
             if not player_id:
                 await ctx.send("Player not found. Please register first.", ephemeral=True)
@@ -141,13 +138,13 @@ class CauldronModule(Extension):
                 WHERE cc.player_id = $1
             """, player_id)
 
-            if not cauldron_items:
-                return await ctx.send("The cauldron is empty.", ephemeral=True)
-
             # Build the cauldron view content
-            cauldron_view = "Items in your cauldron:\n"
-            for item in cauldron_items:
-                cauldron_view += f"- {item['ingredient_name']} (x{item['quantity']})\n"
+            if not cauldron_items:
+                cauldron_view = "The cauldron is empty."
+            else:
+                cauldron_view = "Items in your cauldron:\n"
+                for item in cauldron_items:
+                    cauldron_view += f"- {item['ingredient_name']} (x{item['quantity']})\n"
 
             # Add buttons for interacting with the cauldron
             clear_cauldron_button = Button(
@@ -162,11 +159,16 @@ class CauldronModule(Extension):
             )
 
             # Send the cauldron view with buttons
-            await ctx.send(content=cauldron_view, components=[[clear_cauldron_button, add_ingredient_button]], ephemeral=True)
+            await ctx.send(
+                content=cauldron_view,
+                components=[[add_ingredient_button, clear_cauldron_button]],
+                ephemeral=True
+            )
 
         except Exception as e:
             logging.error(f"Error in view_cauldron_handler: {e}")
             await ctx.send("An error occurred while viewing the cauldron. Please try again.", ephemeral=True)
+
 
     @component_callback(re.compile(r"^clear_cauldron_\d+$"))
     async def clear_cauldron_handler(self, ctx: ComponentContext):
