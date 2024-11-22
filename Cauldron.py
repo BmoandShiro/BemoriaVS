@@ -123,51 +123,73 @@ class CauldronModule(Extension):
 
     @component_callback(re.compile(r"^cauldron_view_\d+$"))
     async def view_cauldron_handler(self, ctx: ComponentContext):
+        """
+        View the cauldron and its contents, including recipe selection.
+        """
         try:
-            # Fetch player_id using discordid
+            location_id = int(ctx.custom_id.split("_")[-1])
             player_id = await self.get_player_id(ctx.author.id)
-            if not player_id:
-                await ctx.send("Player not found. Please register first.", ephemeral=True)
-                return
 
-            # Fetch items in the cauldron for the player
+            # Initialize cauldron_view
+            cauldron_view = ""
+
+            # Check for selected recipe
+            selected_recipe = await self.db.fetchval("""
+                SELECT recipe_id FROM campfire_cauldron
+                WHERE player_id = $1 AND location_id = $2
+            """, player_id, location_id)
+
+            recipe_name = None
+            if selected_recipe:
+                recipe_name = await self.get_item_name(await self.db.fetchval("""
+                    SELECT dish_itemid FROM recipes WHERE recipeid = $1
+                """, selected_recipe))
+                cauldron_view += f"Selected Recipe: {recipe_name}\n\n"
+            else:
+                cauldron_view += "No recipe selected. Please select one to begin.\n\n"
+
+            # Fetch items in the cauldron
             cauldron_items = await self.db.fetch("""
                 SELECT cc.ingredient_id, cc.quantity, i.name AS ingredient_name
                 FROM campfire_cauldron cc
-                JOIN items i ON cc.ingredient_id = i.itemid
-                WHERE cc.player_id = $1
-            """, player_id)
+                LEFT JOIN items i ON cc.ingredient_id = i.itemid
+                WHERE cc.player_id = $1 AND cc.location_id = $2
+            """, player_id, location_id)
 
-            # Build the cauldron view content
             if not cauldron_items:
-                cauldron_view = "The cauldron is empty."
+                cauldron_view += "The cauldron is empty."
             else:
-                cauldron_view = "Items in your cauldron:\n"
+                cauldron_view += "Items in your cauldron:\n"
                 for item in cauldron_items:
                     cauldron_view += f"- {item['ingredient_name']} (x{item['quantity']})\n"
 
-            # Add buttons for interacting with the cauldron
+            # Add buttons for interactions
             clear_cauldron_button = Button(
                 style=ButtonStyle.DANGER,
                 label="Clear Cauldron",
-                custom_id=f"clear_cauldron_{player_id}"
+                custom_id=f"clear_cauldron_{location_id}"
             )
             add_ingredient_button = Button(
                 style=ButtonStyle.SECONDARY,
                 label="Add Ingredient",
-                custom_id=f"add_ingredient_{player_id}"
+                custom_id=f"add_ingredient_{location_id}"
+            )
+            select_recipe_button = Button(
+                style=ButtonStyle.PRIMARY,
+                label="Select Recipe",
+                custom_id=f"cauldron_select_recipe_{location_id}"
             )
 
-            # Send the cauldron view with buttons
             await ctx.send(
                 content=cauldron_view,
-                components=[[add_ingredient_button, clear_cauldron_button]],
+                components=[[select_recipe_button, add_ingredient_button, clear_cauldron_button]],
                 ephemeral=True
             )
 
         except Exception as e:
             logging.error(f"Error in view_cauldron_handler: {e}")
             await ctx.send("An error occurred while viewing the cauldron. Please try again.", ephemeral=True)
+
 
 
     @component_callback(re.compile(r"^clear_cauldron_\d+$"))
@@ -202,6 +224,18 @@ class CauldronModule(Extension):
             location_id = int(ctx.custom_id.split("_")[-1])
             player_id = await self.get_player_id(ctx.author.id)
 
+            # Check if the player has selected a recipe
+            selected_recipe = await self.db.fetchval("""
+                SELECT recipe_id FROM campfire_cauldron
+                WHERE player_id = $1 AND location_id = $2
+            """, player_id, location_id)
+
+            if not selected_recipe:
+                return await ctx.send(
+                    "Please select a recipe before adding ingredients to the cauldron.",
+                    ephemeral=True
+                )
+
             # Fetch items from the player's inventory
             inventory_items = await self.db.fetch("""
                 SELECT 
@@ -228,29 +262,70 @@ class CauldronModule(Extension):
             """, player_id)
 
             if not inventory_items:
-                return await ctx.send("No valid items available to add to the cauldron.", ephemeral=True)
+                return await ctx.send(
+                    "No valid items available in your inventory to add to the cauldron.",
+                    ephemeral=True
+                )
 
-            # Build the dropdown options
+            # Filter inventory items based on the selected recipe's required ingredients
+            required_ingredients = await self.db.fetch("""
+                SELECT 
+                    ingredient1_itemid, ingredient2_itemid, ingredient3_itemid,
+                    ingredient4_itemid, ingredient5_itemid, ingredient6_itemid
+                FROM recipes
+                WHERE recipeid = $1
+            """, selected_recipe)
+
+            required_item_ids = [
+                ingredient for ingredient in required_ingredients[0].values() if ingredient
+            ]
+
+            filtered_items = [
+                item for item in inventory_items if item['itemid'] in required_item_ids or item['caught_fish_id']
+            ]
+
+            if not filtered_items:
+                return await ctx.send(
+                    "You don't have any ingredients matching the selected recipe.",
+                    ephemeral=True
+                )
+
+            # Build the dropdown options dynamically
             options = [
                 StringSelectOption(
                     label=f"{item['name']} (x{item['effective_quantity']})",
                     value=str(item['inventoryid'])
                 )
-                for item in inventory_items
+                for item in filtered_items
             ]
 
-            # Create a dropdown menu
+            # Create the dropdown menu
             dropdown = StringSelectMenu(
                 custom_id=f"select_ingredient_{location_id}_{player_id}",
-                placeholder="Choose an ingredient to add to the cauldron",
+                placeholder="Choose an ingredient to add to the cauldron"
             )
-            dropdown.options = options[:25]  # Add options here, limiting to 25
+            # Add the options to the dropdown menu
+            dropdown.options.extend(options[:25])  # Limit to the first 25 items
 
-            await ctx.send(content="Select an ingredient to add:", components=[dropdown], ephemeral=True)
+            # Send the dropdown menu as a component
+            await ctx.send(
+                content="Select an ingredient to add:",
+                components=[dropdown],
+                ephemeral=True
+            )
 
         except Exception as e:
             logging.error(f"Error in add_ingredient_handler: {e}")
-            await ctx.send("An error occurred while adding the ingredient. Please try again.", ephemeral=True)
+            await ctx.send(
+                "An error occurred while adding the ingredient. Please try again.",
+                ephemeral=True
+            )
+
+
+
+
+
+
 
 
 
@@ -298,6 +373,78 @@ class CauldronModule(Extension):
         except Exception as e:
             logging.error(f"Error in select_ingredient_handler: {e}")
             await ctx.send("An error occurred while adding the ingredient. Please try again.", ephemeral=True)
+
+
+    @component_callback(re.compile(r"^cauldron_select_recipe_\d+$"))
+    async def select_recipe_handler(self, ctx: ComponentContext):
+        """
+        Allow the player to select a recipe for the cauldron.
+        """
+        try:
+            location_id = int(ctx.custom_id.split("_")[-1])
+            player_id = await self.get_player_id(ctx.author.id)
+
+            # Fetch all recipes
+            recipes = await self.db.fetch("""
+                SELECT recipeid, dish_itemid FROM recipes
+            """)
+
+            if not recipes:
+                await ctx.send("No recipes are available at the moment.", ephemeral=True)
+                return
+
+            # Build dropdown options for recipes
+            options = [
+                StringSelectOption(
+                    label=f"{await self.get_item_name(recipe['dish_itemid'])}",
+                    value=str(recipe['recipeid'])
+                )
+                for recipe in recipes
+            ]
+
+            # Create dropdown menu
+            dropdown = StringSelectMenu(
+                custom_id=f"select_recipe_{location_id}_{player_id}",
+                placeholder="Choose a recipe to prepare"
+            )
+            dropdown.options = options[:25]  # Limit to the first 25 recipes
+
+            await ctx.send(content="Select a recipe:", components=[dropdown], ephemeral=True)
+
+        except Exception as e:
+            logging.error(f"Error in select_recipe_handler: {e}")
+            await ctx.send("An error occurred while selecting a recipe. Please try again.", ephemeral=True)
+            
+    @component_callback(re.compile(r"^select_recipe_\d+_\d+$"))
+    async def store_selected_recipe(self, ctx: ComponentContext):
+        """
+        Store the selected recipe in the cauldron for the player.
+        """
+        try:
+            location_id, player_id = map(int, ctx.custom_id.split("_")[-2:])
+            recipe_id = int(ctx.values[0])
+
+            # Insert or update the selected recipe in the cauldron
+            await self.db.execute("""
+                INSERT INTO campfire_cauldron (player_id, location_id, recipe_id, ingredient_slot)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (player_id, location_id)
+                DO UPDATE SET recipe_id = EXCLUDED.recipe_id
+            """, player_id, location_id, recipe_id, 0)  # Provide a default value for ingredient_slot
+
+            # Fetch recipe name for confirmation
+            recipe_name = await self.get_item_name(await self.db.fetchval("""
+                SELECT dish_itemid FROM recipes WHERE recipeid = $1
+            """, recipe_id))
+
+            await ctx.send(f"Selected recipe: {recipe_name}. You can now add ingredients.", ephemeral=True)
+
+        except Exception as e:
+            logging.error(f"Error in store_selected_recipe: {e}")
+            await ctx.send("An error occurred while selecting the recipe. Please try again.", ephemeral=True)
+
+
+
 
 
 # Setup function to load this as an extension
