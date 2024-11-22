@@ -204,33 +204,60 @@ class CauldronModule(Extension):
 
             # Fetch items from the player's inventory
             inventory_items = await self.db.fetch("""
-                SELECT itemid, quantity, name
-                FROM inventory
-                JOIN items ON inventory.itemid = items.itemid
-                WHERE playerid = $1
+                SELECT inv.itemid AS item_id, inv.quantity, items.name
+                FROM inventory AS inv
+                JOIN items ON inv.itemid = items.itemid
+                WHERE inv.playerid = $1
             """, player_id)
 
             if not inventory_items:
                 return await ctx.send("You have no items in your inventory to add.", ephemeral=True)
 
-            # Build the dropdown options
-            options = [
-                StringSelectOption(label=f"{item['name']} (x{item['quantity']})", value=str(item['itemid']))
-                for item in inventory_items
-            ]
+            # Create options for the dropdown menu
+            # Filter and handle items with or without `itemid`
+            options = []
 
-            # Create a dropdown for selecting an ingredient
+            for item in inventory_items:
+                if 'itemid' in item and item['itemid']:
+                    # Regular inventory item with itemid
+                    options.append(
+                        StringSelectOption(
+                            label=f"{item['name']} (x{item['quantity']})",
+                            value=str(item['itemid'])
+                        )
+                    )
+                elif 'caught_fish_id' in item:  # Example: Caught fish use a different key
+                    options.append(
+                        StringSelectOption(
+                            label=f"{item['fish_name']} (Caught Fish)",
+                            value=f"fish_{item['caught_fish_id']}"  # Add a unique prefix for fish
+                        )
+                    )
+
+            if not options:
+                # Handle the case where no valid items are available
+                await ctx.send("No valid items available to add to the cauldron.", ephemeral=True)
+                return
+
+            # Create a dropdown menu
             dropdown = StringSelectMenu(
                 custom_id=f"select_ingredient_{location_id}_{player_id}",
                 placeholder="Choose an ingredient to add to the cauldron",
-                options=options[:25]
+                options=options[:25]  # Limit to the first 25 items
             )
 
+            # Send the dropdown menu
             await ctx.send(content="Select an ingredient to add:", components=[dropdown], ephemeral=True)
+
 
         except Exception as e:
             logging.error(f"Error in add_ingredient_handler: {e}")
             await ctx.send("An error occurred while adding the ingredient. Please try again.", ephemeral=True)
+
+
+
+
+
 
     @component_callback(re.compile(r"^select_ingredient_\d+_\d+$"))
     async def select_ingredient_handler(self, ctx: ComponentContext):
