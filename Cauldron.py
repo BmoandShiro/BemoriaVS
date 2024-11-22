@@ -1,4 +1,4 @@
-from interactions import Extension, Button, ButtonStyle, ComponentContext, component_callback
+from interactions import Extension, Button, ButtonStyle, ComponentContext, component_callback, StringSelectMenu, StringSelectOption
 import logging
 import re
 
@@ -8,24 +8,32 @@ class CauldronModule(Extension):
         self.bot = bot
         self.db = bot.db
 
+    async def get_player_id(self, discord_id):
+        """
+        Fetch the player ID using the Discord ID.
+        """
+        return await self.db.fetchval("""
+            SELECT playerid FROM players WHERE discord_id = $1
+        """, discord_id)
+
     async def add_ingredient(self, player_id, location_id, ingredient_id, quantity):
         """
         Add an ingredient to the cauldron.
         """
         existing_entry = await self.db.fetchrow("""
             SELECT quantity FROM campfire_cauldron
-            WHERE player_id = $1 AND campfire_id = $2 AND ingredient_id = $3
+            WHERE player_id = $1 AND location_id = $2 AND ingredient_id = $3
         """, player_id, location_id, ingredient_id)
 
         if existing_entry:
             await self.db.execute("""
                 UPDATE campfire_cauldron
                 SET quantity = quantity + $1
-                WHERE player_id = $2 AND campfire_id = $3 AND ingredient_id = $4
+                WHERE player_id = $2 AND location_id = $3 AND ingredient_id = $4
             """, quantity, player_id, location_id, ingredient_id)
         else:
             await self.db.execute("""
-                INSERT INTO campfire_cauldron (player_id, campfire_id, ingredient_id, quantity)
+                INSERT INTO campfire_cauldron (player_id, location_id, ingredient_id, quantity)
                 VALUES ($1, $2, $3, $4)
             """, player_id, location_id, ingredient_id, quantity)
 
@@ -35,7 +43,7 @@ class CauldronModule(Extension):
         """
         cauldron_items = await self.db.fetch("""
             SELECT ingredient_id, quantity FROM campfire_cauldron
-            WHERE player_id = $1 AND campfire_id = $2
+            WHERE player_id = $1 AND location_id = $2
         """, player_id, location_id)
 
         recipe = await self.db.fetchrow("""
@@ -72,7 +80,7 @@ class CauldronModule(Extension):
         """
         Handle ingredient validation for a cauldron.
         """
-        player_id = await self.db.get_or_create_player(ctx.author.id)
+        player_id = await self.get_player_id(ctx.author.id)
         location_id = await self.bot.travel_system.get_player_location(player_id)
         recipe_id = int(ctx.custom_id.split("_")[-1])
 
@@ -89,7 +97,7 @@ class CauldronModule(Extension):
         await self.db.execute("""
             UPDATE campfire_cauldron
             SET quantity = quantity - $1
-            WHERE player_id = $2 AND campfire_id = $3 AND ingredient_id = $4
+            WHERE player_id = $2 AND location_id = $3 AND ingredient_id = $4
         """, quantity, player_id, location_id, ingredient_id)
 
         await self.db.execute("""
@@ -106,7 +114,6 @@ class CauldronModule(Extension):
             label="Validate Ingredients",
             custom_id=f"cauldron_validate_{location_id}"
         )
-        # Add more buttons for ingredient management if needed
 
         await ctx.send(
             content="Manage your cauldron here:",
@@ -116,13 +123,12 @@ class CauldronModule(Extension):
 
     @component_callback(re.compile(r"^cauldron_view_\d+$"))
     async def view_cauldron_handler(self, ctx: ComponentContext):
+        """
+        Handle viewing the cauldron content.
+        """
         try:
-            # Fetch player_id using discordid
-            discord_id = ctx.author.id
-            player_id = await self.db.fetchval("""
-                SELECT playerid FROM players WHERE discordid = $1
-            """, discord_id)
-        
+            # Fetch player_id using discord_id
+            player_id = await self.get_player_id(ctx.author.id)
             if not player_id:
                 await ctx.send("Player not found. Please register first.", ephemeral=True)
                 return
@@ -162,7 +168,6 @@ class CauldronModule(Extension):
             logging.error(f"Error in view_cauldron_handler: {e}")
             await ctx.send("An error occurred while viewing the cauldron. Please try again.", ephemeral=True)
 
-
     @component_callback(re.compile(r"^clear_cauldron_\d+$"))
     async def clear_cauldron_handler(self, ctx: ComponentContext):
         """
@@ -171,9 +176,7 @@ class CauldronModule(Extension):
         try:
             # Extract the location ID from the custom ID
             location_id = int(ctx.custom_id.split("_")[-1])
-
-            # Get the player ID
-            player_id = await self.db.get_or_create_player(ctx.author.id)
+            player_id = await self.get_player_id(ctx.author.id)
 
             # Clear all items in the cauldron for the player at this location
             await self.db.execute("""
@@ -187,7 +190,6 @@ class CauldronModule(Extension):
             logging.error(f"Error in clear_cauldron_handler: {e}")
             await ctx.send("An error occurred while clearing the cauldron. Please try again.", ephemeral=True)
 
-        
     @component_callback(re.compile(r"^add_ingredient_\d+$"))
     async def add_ingredient_handler(self, ctx: ComponentContext):
         """
@@ -196,9 +198,7 @@ class CauldronModule(Extension):
         try:
             # Extract the location ID from the custom ID
             location_id = int(ctx.custom_id.split("_")[-1])
-
-            # Get the player ID
-            player_id = await self.db.get_or_create_player(ctx.author.id)
+            player_id = await self.get_player_id(ctx.author.id)
 
             # Fetch items from the player's inventory
             inventory_items = await self.db.fetch("""
@@ -221,7 +221,7 @@ class CauldronModule(Extension):
             dropdown = StringSelectMenu(
                 custom_id=f"select_ingredient_{location_id}_{player_id}",
                 placeholder="Choose an ingredient to add to the cauldron",
-                options=options[:25]  # Limit to the first 25 items
+                options=options[:25]
             )
 
             await ctx.send(content="Select an ingredient to add:", components=[dropdown], ephemeral=True)
@@ -230,10 +230,13 @@ class CauldronModule(Extension):
             logging.error(f"Error in add_ingredient_handler: {e}")
             await ctx.send("An error occurred while adding the ingredient. Please try again.", ephemeral=True)
 
-    @component_callback(re.compile(r"^select_ingredient_\d+$"))
+    @component_callback(re.compile(r"^select_ingredient_\d+_\d+$"))
     async def select_ingredient_handler(self, ctx: ComponentContext):
+        """
+        Handle ingredient selection to add to the cauldron.
+        """
         try:
-            player_id = int(ctx.custom_id.split("_")[-1])
+            location_id, player_id = map(int, ctx.custom_id.split("_")[-2:])
             selected_item_id = int(ctx.values[0])
 
             # Check if the player has the selected item in their inventory
@@ -248,11 +251,11 @@ class CauldronModule(Extension):
 
             # Add the selected item to the cauldron or update its quantity
             await self.db.execute("""
-                INSERT INTO campfire_cauldron (player_id, campfire_id, ingredient_id, quantity)
+                INSERT INTO campfire_cauldron (player_id, location_id, ingredient_id, quantity)
                 VALUES ($1, $2, $3, $4)
-                ON CONFLICT (player_id, campfire_id, ingredient_id)
+                ON CONFLICT (player_id, location_id, ingredient_id)
                 DO UPDATE SET quantity = campfire_cauldron.quantity + EXCLUDED.quantity
-            """, player_id, 1, selected_item_id, 1)  # Assuming campfire_id = 1
+            """, player_id, location_id, selected_item_id, 1)
 
             # Decrease the quantity of the item in the player's inventory
             await self.db.execute("""
@@ -261,15 +264,13 @@ class CauldronModule(Extension):
                 WHERE playerid = $1 AND itemid = $2
             """, player_id, selected_item_id)
 
-            await ctx.send(f"Added {item['name']} to the cauldron.", ephemeral=True)
+            await ctx.send(f"Added {await self.get_item_name(selected_item_id)} to the cauldron.", ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error in select_ingredient_handler: {e}")
             await ctx.send("An error occurred while adding the ingredient. Please try again.", ephemeral=True)
 
 
-
 # Setup function to load this as an extension
 def setup(bot):
     CauldronModule(bot)
-
