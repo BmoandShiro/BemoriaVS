@@ -505,6 +505,7 @@ class CauldronModule(Extension):
                 SELECT * FROM recipes WHERE recipeid = (
                     SELECT recipe_id FROM campfire_cauldron
                     WHERE player_id = $1 AND location_id = $2
+                    LIMIT 1
                 )
             """, player_id, location_id)
 
@@ -538,7 +539,7 @@ class CauldronModule(Extension):
                 DO UPDATE SET quantity = inventory.quantity + 1
             """, player_id, dish_item_id)
 
-            # Clear the cauldron
+            # Clear the cauldron for this player and location
             await self.db.execute("""
                 DELETE FROM campfire_cauldron
                 WHERE player_id = $1 AND location_id = $2
