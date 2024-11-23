@@ -136,7 +136,7 @@ class CauldronModule(Extension):
             # Check for selected recipe
             selected_recipe = await self.db.fetchval("""
                 SELECT recipe_id FROM campfire_cauldron
-                WHERE player_id = $1 AND location_id = $2
+                WHERE player_id = $1 AND location_id = $2 AND recipe_id IS NOT NULL
             """, player_id, location_id)
 
             recipe_name = None
@@ -161,22 +161,34 @@ class CauldronModule(Extension):
             else:
                 cauldron_view += "Items in your cauldron:\n"
                 for item in cauldron_items:
-                    cauldron_view += f"- {item['ingredient_name']} (x{item['quantity']})\n"
+                    if item['ingredient_id']:  # Ensure no 'None' items are displayed
+                        cauldron_view += f"- {item['ingredient_name']} (x{item['quantity']})\n"
 
             # Add buttons for interactions
-            buttons = [
-                Button(style=ButtonStyle.PRIMARY, label="Select Recipe", custom_id=f"cauldron_select_recipe_{location_id}"),
-                Button(style=ButtonStyle.SECONDARY, label="Add Ingredient", custom_id=f"add_ingredient_{location_id}"),
-                Button(style=ButtonStyle.DANGER, label="Clear Cauldron", custom_id=f"clear_cauldron_{location_id}")
-            ]
-
-            # Add the "Light Flame" button if the recipe and ingredients are set
-            if selected_recipe and cauldron_items:
-                buttons.append(Button(style=ButtonStyle.SUCCESS, label="Light Flame", custom_id=f"light_flame_{location_id}"))
+            clear_cauldron_button = Button(
+                style=ButtonStyle.DANGER,
+                label="Clear Cauldron",
+                custom_id=f"clear_cauldron_{location_id}"
+            )
+            add_ingredient_button = Button(
+                style=ButtonStyle.SECONDARY,
+                label="Add Ingredient",
+                custom_id=f"add_ingredient_{location_id}"
+            )
+            select_recipe_button = Button(
+                style=ButtonStyle.PRIMARY,
+                label="Select Recipe",
+                custom_id=f"cauldron_select_recipe_{location_id}"
+            )
+            light_flame_button = Button(
+                style=ButtonStyle.SUCCESS,
+                label="Light Flame",
+                custom_id=f"light_flame_{location_id}"
+            )
 
             await ctx.send(
                 content=cauldron_view,
-                components=[buttons],
+                components=[[select_recipe_button, add_ingredient_button, clear_cauldron_button, light_flame_button]],
                 ephemeral=True
             )
 
@@ -494,62 +506,86 @@ class CauldronModule(Extension):
     @component_callback(re.compile(r"^light_flame_\d+$"))
     async def light_flame_handler(self, ctx: ComponentContext):
         """
-        Handle the "Light Flame" button to complete the process.
+        Handle the 'Light Flame' button to complete the cooking process.
         """
         try:
             location_id = int(ctx.custom_id.split("_")[-1])
             player_id = await self.get_player_id(ctx.author.id)
 
-            # Fetch the recipe and cauldron contents
-            selected_recipe = await self.db.fetchrow("""
-                SELECT * FROM recipes WHERE recipeid = (
-                    SELECT recipe_id FROM campfire_cauldron
-                    WHERE player_id = $1 AND location_id = $2
-                    LIMIT 1
-                )
-            """, player_id, location_id)
-
-            cauldron_items = await self.db.fetch("""
-                SELECT ingredient_id, quantity FROM campfire_cauldron
+            # Fetch the selected recipe_id
+            recipe_id = await self.db.fetchval("""
+                SELECT recipe_id
+                FROM campfire_cauldron
                 WHERE player_id = $1 AND location_id = $2
             """, player_id, location_id)
 
-            if not selected_recipe or not cauldron_items:
-                return await ctx.send("The cauldron is not ready to cook. Ensure you have a recipe and the required ingredients.", ephemeral=True)
+            if not recipe_id:
+                await ctx.send("No recipe selected. Please select a recipe first.", ephemeral=True)
+                return
 
-            # Validate ingredients
+            # Fetch the recipe details
+            recipe = await self.db.fetchrow("""
+                SELECT ingredient1_itemid, ingredient2_itemid, ingredient3_itemid,
+                       ingredient4_itemid, ingredient5_itemid, ingredient6_itemid,
+                       quantity1_required, quantity2_required, quantity3_required,
+                       quantity4_required, quantity5_required, quantity6_required
+                FROM recipes
+                WHERE recipeid = $1
+            """, recipe_id)
+
+            if not recipe:
+                await ctx.send("Invalid recipe. Please select a valid recipe.", ephemeral=True)
+                return
+
+            # Fetch the current cauldron contents
+            cauldron_contents = await self.db.fetch("""
+                SELECT ingredient_id, quantity
+                FROM campfire_cauldron
+                WHERE player_id = $1 AND location_id = $2
+            """, player_id, location_id)
+
+            # Validate that all required ingredients are present in sufficient quantities
             for i in range(1, 7):
-                ingredient_id = selected_recipe[f'ingredient{i}_itemid']
-                quantity_required = selected_recipe[f'quantity{i}_required']
+                ingredient_id = recipe[f'ingredient{i}_itemid']
+                quantity_required = recipe[f'quantity{i}_required']
 
                 if ingredient_id and quantity_required:
-                    cauldron_quantity = next(
-                        (item['quantity'] for item in cauldron_items if item['ingredient_id'] == ingredient_id),
-                        0
-                    )
-                    if cauldron_quantity < quantity_required:
-                        return await ctx.send("The ingredients in the cauldron do not match the recipe.", ephemeral=True)
+                    cauldron_item = next((item for item in cauldron_contents if item['ingredient_id'] == ingredient_id), None)
+                    if not cauldron_item or cauldron_item['quantity'] < quantity_required:
+                        await ctx.send(
+                            f"Missing or insufficient quantity for ingredient: {await self.get_item_name(ingredient_id)}.",
+                            ephemeral=True
+                        )
+                        return
 
-            # Reward the player with the recipe's item
-            dish_item_id = selected_recipe["dish_itemid"]
+            # If validation succeeds, cook the dish
+            dish_itemid = await self.db.fetchval("""
+                SELECT dish_itemid
+                FROM recipes
+                WHERE recipeid = $1
+            """, recipe_id)
+
+            # Add the dish to the player's inventory
             await self.db.execute("""
                 INSERT INTO inventory (playerid, itemid, quantity)
-                VALUES ($1, $2, 1)
+                VALUES ($1, $2, $3)
                 ON CONFLICT (playerid, itemid)
-                DO UPDATE SET quantity = inventory.quantity + 1
-            """, player_id, dish_item_id)
+                DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity
+            """, player_id, dish_itemid, 1)
 
-            # Clear the cauldron for this player and location
+            # Clear the cauldron
             await self.db.execute("""
                 DELETE FROM campfire_cauldron
                 WHERE player_id = $1 AND location_id = $2
             """, player_id, location_id)
 
-            await ctx.send(f"Successfully cooked {await self.get_item_name(dish_item_id)}! The cauldron has been cleared.", ephemeral=True)
+            await ctx.send(f"You successfully cooked {await self.get_item_name(dish_itemid)}!", ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error in light_flame_handler: {e}")
-            await ctx.send("An error occurred while cooking. Please try again.", ephemeral=True)
+            await ctx.send("An error occurred while lighting the flame. Please try again.", ephemeral=True)
+
+
 
 
 
