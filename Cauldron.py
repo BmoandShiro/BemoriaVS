@@ -164,31 +164,26 @@ class CauldronModule(Extension):
                     cauldron_view += f"- {item['ingredient_name']} (x{item['quantity']})\n"
 
             # Add buttons for interactions
-            clear_cauldron_button = Button(
-                style=ButtonStyle.DANGER,
-                label="Clear Cauldron",
-                custom_id=f"clear_cauldron_{location_id}"
-            )
-            add_ingredient_button = Button(
-                style=ButtonStyle.SECONDARY,
-                label="Add Ingredient",
-                custom_id=f"add_ingredient_{location_id}"
-            )
-            select_recipe_button = Button(
-                style=ButtonStyle.PRIMARY,
-                label="Select Recipe",
-                custom_id=f"cauldron_select_recipe_{location_id}"
-            )
+            buttons = [
+                Button(style=ButtonStyle.PRIMARY, label="Select Recipe", custom_id=f"cauldron_select_recipe_{location_id}"),
+                Button(style=ButtonStyle.SECONDARY, label="Add Ingredient", custom_id=f"add_ingredient_{location_id}"),
+                Button(style=ButtonStyle.DANGER, label="Clear Cauldron", custom_id=f"clear_cauldron_{location_id}")
+            ]
+
+            # Add the "Light Flame" button if the recipe and ingredients are set
+            if selected_recipe and cauldron_items:
+                buttons.append(Button(style=ButtonStyle.SUCCESS, label="Light Flame", custom_id=f"light_flame_{location_id}"))
 
             await ctx.send(
                 content=cauldron_view,
-                components=[[select_recipe_button, add_ingredient_button, clear_cauldron_button]],
+                components=[buttons],
                 ephemeral=True
             )
 
         except Exception as e:
             logging.error(f"Error in view_cauldron_handler: {e}")
             await ctx.send("An error occurred while viewing the cauldron. Please try again.", ephemeral=True)
+
 
 
 
@@ -496,6 +491,64 @@ class CauldronModule(Extension):
             logging.error(f"Error in store_selected_recipe: {e}")
             await ctx.send("An error occurred while selecting the recipe. Please try again.", ephemeral=True)
 
+    @component_callback(re.compile(r"^light_flame_\d+$"))
+    async def light_flame_handler(self, ctx: ComponentContext):
+        """
+        Handle the "Light Flame" button to complete the process.
+        """
+        try:
+            location_id = int(ctx.custom_id.split("_")[-1])
+            player_id = await self.get_player_id(ctx.author.id)
+
+            # Fetch the recipe and cauldron contents
+            selected_recipe = await self.db.fetchrow("""
+                SELECT * FROM recipes WHERE recipeid = (
+                    SELECT recipe_id FROM campfire_cauldron
+                    WHERE player_id = $1 AND location_id = $2
+                )
+            """, player_id, location_id)
+
+            cauldron_items = await self.db.fetch("""
+                SELECT ingredient_id, quantity FROM campfire_cauldron
+                WHERE player_id = $1 AND location_id = $2
+            """, player_id, location_id)
+
+            if not selected_recipe or not cauldron_items:
+                return await ctx.send("The cauldron is not ready to cook. Ensure you have a recipe and the required ingredients.", ephemeral=True)
+
+            # Validate ingredients
+            for i in range(1, 7):
+                ingredient_id = selected_recipe[f'ingredient{i}_itemid']
+                quantity_required = selected_recipe[f'quantity{i}_required']
+
+                if ingredient_id and quantity_required:
+                    cauldron_quantity = next(
+                        (item['quantity'] for item in cauldron_items if item['ingredient_id'] == ingredient_id),
+                        0
+                    )
+                    if cauldron_quantity < quantity_required:
+                        return await ctx.send("The ingredients in the cauldron do not match the recipe.", ephemeral=True)
+
+            # Reward the player with the recipe's item
+            dish_item_id = selected_recipe["dish_itemid"]
+            await self.db.execute("""
+                INSERT INTO inventory (playerid, itemid, quantity)
+                VALUES ($1, $2, 1)
+                ON CONFLICT (playerid, itemid)
+                DO UPDATE SET quantity = inventory.quantity + 1
+            """, player_id, dish_item_id)
+
+            # Clear the cauldron
+            await self.db.execute("""
+                DELETE FROM campfire_cauldron
+                WHERE player_id = $1 AND location_id = $2
+            """, player_id, location_id)
+
+            await ctx.send(f"Successfully cooked {await self.get_item_name(dish_item_id)}! The cauldron has been cleared.", ephemeral=True)
+
+        except Exception as e:
+            logging.error(f"Error in light_flame_handler: {e}")
+            await ctx.send("An error occurred while cooking. Please try again.", ephemeral=True)
 
 
 
