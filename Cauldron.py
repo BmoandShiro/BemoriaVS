@@ -16,10 +16,14 @@ class CauldronModule(Extension):
             SELECT playerid FROM players WHERE discord_id = $1
         """, discord_id)
 
-    async def add_ingredient(self, player_id, location_id, ingredient_id, quantity):
-        """
-        Add an ingredient to the cauldron.
-        """
+    async def add_ingredient(self, player_id, ingredient_id, quantity):
+        # Fetch the current location of the player
+        location_id = await self.db.fetchval("""
+            SELECT current_location
+            FROM player_data
+            WHERE playerid = $1
+        """, player_id)
+
         existing_entry = await self.db.fetchrow("""
             SELECT quantity FROM campfire_cauldron
             WHERE player_id = $1 AND location_id = $2 AND ingredient_id = $3
@@ -36,6 +40,7 @@ class CauldronModule(Extension):
                 INSERT INTO campfire_cauldron (player_id, location_id, ingredient_id, quantity)
                 VALUES ($1, $2, $3, $4)
             """, player_id, location_id, ingredient_id, quantity)
+
 
     async def validate_cauldron(self, player_id, location_id, recipe_id):
         """
@@ -127,8 +132,18 @@ class CauldronModule(Extension):
         View the cauldron and its contents, including recipe selection.
         """
         try:
-            location_id = int(ctx.custom_id.split("_")[-1])
+             # Fetch the player ID using the Discord ID
             player_id = await self.get_player_id(ctx.author.id)
+            if not player_id:
+                raise ValueError("Player ID not found for the current user.")
+            
+            # Fetch the current location of the player
+            location_id = await self.db.fetchval("""
+                SELECT current_location
+                FROM player_data
+                WHERE playerid = $1
+            """, player_id)
+          
 
             # Initialize cauldron_view
             cauldron_view = ""
