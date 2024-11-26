@@ -62,7 +62,7 @@ class CauldronModule(Extension):
 
 
 
-    async def validate_cauldron(self, player_id, location_id, recipe_id):
+    '''async def validate_cauldron(self, player_id, location_id, recipe_id):
         """
         Validate ingredients in the cauldron for a given recipe.
         """
@@ -90,7 +90,7 @@ class CauldronModule(Extension):
                 if cauldron_quantity < quantity_required:
                     return False, f"Missing ingredient: {await self.get_item_name(ingredient_id)}"
 
-        return True, None
+        return True, None'''
 
     async def get_item_name(self, item_id):
         """
@@ -100,7 +100,7 @@ class CauldronModule(Extension):
             SELECT name FROM items WHERE itemid = $1
         """, item_id)
 
-    @component_callback(re.compile(r"^cauldron_validate_\d+$"))
+    '''@component_callback(re.compile(r"^cauldron_validate_\d+$"))
     async def validate_cauldron_handler(self, ctx: ComponentContext):
         """
         Handle ingredient validation for a cauldron.
@@ -113,7 +113,7 @@ class CauldronModule(Extension):
         if valid:
             await ctx.send("Ingredients are valid! Ready to cook.", ephemeral=True)
         else:
-            await ctx.send(f"Validation failed: {error}", ephemeral=True)
+            await ctx.send(f"Validation failed: {error}", ephemeral=True)'''
 
     async def remove_ingredient(self, player_id, location_id, ingredient_id, quantity):
         """
@@ -590,7 +590,8 @@ class CauldronModule(Extension):
                 SELECT ingredient1_itemid, ingredient2_itemid, ingredient3_itemid,
                        ingredient4_itemid, ingredient5_itemid, ingredient6_itemid,
                        quantity1_required, quantity2_required, quantity3_required,
-                       quantity4_required, quantity5_required, quantity6_required
+                       quantity4_required, quantity5_required, quantity6_required,
+                       caught_fish_name1, caught_fish_name2, caught_fish_name3
                 FROM recipes
                 WHERE recipeid = $1
             """, recipe_id)
@@ -601,24 +602,60 @@ class CauldronModule(Extension):
 
             # Fetch the current cauldron contents
             cauldron_contents = await self.db.fetch("""
-                SELECT ingredient_id, quantity
+                SELECT ingredient_id, caught_fish_id, quantity
                 FROM campfire_cauldron
                 WHERE player_id = $1 AND location_id = $2
             """, player_id, location_id)
 
-            # Validate that all required ingredients are present in sufficient quantities
+            # Ensure cauldron_contents is a list for safe iteration
+            cauldron_contents = list(cauldron_contents)
+
+            # Validate required ingredients
             for i in range(1, 7):
                 ingredient_id = recipe[f'ingredient{i}_itemid']
                 quantity_required = recipe[f'quantity{i}_required']
 
                 if ingredient_id and quantity_required:
-                    cauldron_item = next((item for item in cauldron_contents if item['ingredient_id'] == ingredient_id), None)
+                    cauldron_item = next(
+                        (item for item in cauldron_contents if item['ingredient_id'] == ingredient_id),
+                        None
+                    )
                     if not cauldron_item or cauldron_item['quantity'] < quantity_required:
+                        missing_item_name = await self.get_item_name(ingredient_id)
                         await ctx.send(
-                            f"Missing or insufficient quantity for ingredient: {await self.get_item_name(ingredient_id)}.",
+                            f"Missing or insufficient quantity for ingredient: {missing_item_name}.",
                             ephemeral=True
                         )
                         return
+
+            # Validate required caught fish
+            for i in range(1, 4):
+                fish_name = recipe.get(f'caught_fish_name{i}')
+
+                if fish_name:
+                    if fish_name.lower() == "any":
+                        # Match any fish in the cauldron with a caught_fish_id
+                        matching_fish = [
+                            item for item in cauldron_contents if item['caught_fish_id']
+                        ]
+                    else:
+                        # Match fish with a specific name
+                        matching_fish = [
+                            item for item in cauldron_contents if item['caught_fish_id']
+                            and await self.db.fetchval(
+                                "SELECT fish_name FROM caught_fish WHERE id = $1",
+                                item['caught_fish_id']
+                            ) == fish_name
+                        ]
+
+                    # Check if sufficient quantity is available
+                    if not matching_fish or sum(f['quantity'] for f in matching_fish) < 1:
+                        await ctx.send(
+                            f"Missing required fish: {fish_name}.",
+                            ephemeral=True
+                        )
+                        return
+
 
             # If validation succeeds, cook the dish
             dish_itemid = await self.db.fetchval("""
@@ -646,6 +683,7 @@ class CauldronModule(Extension):
         except Exception as e:
             logging.error(f"Error in light_flame_handler: {e}")
             await ctx.send("An error occurred while lighting the flame. Please try again.", ephemeral=True)
+
 
 
 
