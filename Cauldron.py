@@ -152,18 +152,17 @@ class CauldronModule(Extension):
         View the cauldron and its contents, including recipe selection.
         """
         try:
-             # Fetch the player ID using the Discord ID
+            # Fetch the player ID using the Discord ID
             player_id = await self.get_player_id(ctx.author.id)
             if not player_id:
                 raise ValueError("Player ID not found for the current user.")
-            
+
             # Fetch the current location of the player
             location_id = await self.db.fetchval("""
                 SELECT current_location
                 FROM player_data
                 WHERE playerid = $1
             """, player_id)
-          
 
             # Initialize cauldron_view
             cauldron_view = ""
@@ -185,9 +184,15 @@ class CauldronModule(Extension):
 
             # Fetch items in the cauldron
             cauldron_items = await self.db.fetch("""
-                SELECT cc.ingredient_id, cc.quantity, i.name AS ingredient_name
+                SELECT 
+                    cc.ingredient_id, 
+                    cc.caught_fish_id, 
+                    cc.quantity, 
+                    i.name AS ingredient_name, 
+                    cf.fish_name AS fish_name
                 FROM campfire_cauldron cc
                 LEFT JOIN items i ON cc.ingredient_id = i.itemid
+                LEFT JOIN caught_fish cf ON cc.caught_fish_id = cf.id
                 WHERE cc.player_id = $1 AND cc.location_id = $2
             """, player_id, location_id)
 
@@ -196,8 +201,12 @@ class CauldronModule(Extension):
             else:
                 cauldron_view += "Items in your cauldron:\n"
                 for item in cauldron_items:
-                    if item['ingredient_id']:  # Ensure no 'None' items are displayed
+                    if item['ingredient_id']:
+                        # Display the item name if it has an ingredient_id
                         cauldron_view += f"- {item['ingredient_name']} (x{item['quantity']})\n"
+                    elif item['caught_fish_id']:
+                        # Display the fish name if it has a caught_fish_id
+                        cauldron_view += f"- {item['fish_name']} (x{item['quantity']})\n"
 
             # Add buttons for interactions
             clear_cauldron_button = Button(
@@ -230,6 +239,7 @@ class CauldronModule(Extension):
         except Exception as e:
             logging.error(f"Error in view_cauldron_handler: {e}")
             await ctx.send("An error occurred while viewing the cauldron. Please try again.", ephemeral=True)
+
 
 
 
