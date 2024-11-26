@@ -387,14 +387,12 @@ class CauldronModule(Extension):
         Handle ingredient selection to add to the cauldron.
         """
         try:
-            # Extract location_id and player_id from custom_id
             location_id, player_id = map(int, ctx.custom_id.split("_")[-2:])
-            inventory_id = int(ctx.values[0])  # Dropdown sends inventoryid
+            selected_inventory_id = int(ctx.values[0])
 
-            # Fetch the recipe_id for the selected recipe
+            # Fetch the recipe_id for the player's selected recipe
             recipe_id = await self.db.fetchval("""
-                SELECT recipe_id
-                FROM campfire_cauldron
+                SELECT recipe_id FROM campfire_cauldron
                 WHERE player_id = $1 AND location_id = $2
             """, player_id, location_id)
 
@@ -404,16 +402,19 @@ class CauldronModule(Extension):
                     ephemeral=True
                 )
 
-            # Fetch the itemid from inventory table using the inventory_id
+            # Check if the player has the selected item in their inventory
             item = await self.db.fetchrow("""
-                SELECT itemid, quantity, caught_fish_id,
+                SELECT itemid, quantity, caught_fish_id, 
                        CASE 
                            WHEN caught_fish_id IS NOT NULL THEN 1
                            ELSE quantity
                        END AS effective_quantity
                 FROM inventory
                 WHERE playerid = $1 AND inventoryid = $2
-            """, player_id, inventory_id)
+            """, player_id, selected_inventory_id)
+
+            # Log the item details for debugging
+            logging.info(f"Player {player_id}, Location {location_id}, Selected Item: {item}")
 
             if not item:
                 return await ctx.send("You do not have this item in your inventory.", ephemeral=True)
@@ -421,22 +422,25 @@ class CauldronModule(Extension):
             # Check if the player has enough of the selected item
             if item['effective_quantity'] <= 0:
                 logging.warning(
-                    f"Player {player_id} does not have enough of item ID {item['itemid']} "
-                    f"(Effective Quantity: {item['effective_quantity']})."
+                    f"Player {player_id} does not have enough of item ID {item['itemid']} (Effective Quantity: {item['effective_quantity']})."
                 )
                 return await ctx.send("You do not have enough of this item to add.", ephemeral=True)
 
-            # Add the item to the cauldron or update its quantity
+            # Determine whether to populate `ingredient_id` or `caught_fish_id`
+            ingredient_id = item['itemid'] if item['itemid'] else None
+            caught_fish_id = item['caught_fish_id'] if item['caught_fish_id'] else None
+
+            # Add the selected item to the cauldron or update its quantity
             await self.db.execute("""
-                INSERT INTO campfire_cauldron (player_id, location_id, recipe_id, ingredient_id, quantity)
-                VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (player_id, location_id, ingredient_id)
+                INSERT INTO campfire_cauldron (player_id, location_id, recipe_id, ingredient_id, caught_fish_id, quantity)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (player_id, location_id, ingredient_id, caught_fish_id)
                 DO UPDATE SET quantity = campfire_cauldron.quantity + EXCLUDED.quantity
-            """, player_id, location_id, recipe_id, item['itemid'], 1)
+            """, player_id, location_id, recipe_id, ingredient_id, caught_fish_id, 1)
 
             # Log successful addition to the cauldron
             logging.info(
-                f"Added item {item['itemid']} to cauldron at location {location_id} for player {player_id}."
+                f"Added item {item['itemid']} or fish {item['caught_fish_id']} to cauldron at location {location_id} for player {player_id}."
             )
 
             # Decrease the quantity of the item in the player's inventory
@@ -444,18 +448,24 @@ class CauldronModule(Extension):
                 UPDATE inventory
                 SET quantity = quantity - 1
                 WHERE playerid = $1 AND inventoryid = $2
-            """, player_id, inventory_id)
+            """, player_id, selected_inventory_id)
 
-            # Get the item name for confirmation
-            item_name = await self.get_item_name(item['itemid'])
+            # Fetch the name of the added item or fish
+            if ingredient_id:
+                item_name = await self.get_item_name(ingredient_id)
+            elif caught_fish_id:
+                item_name = await self.db.fetchval("""
+                    SELECT fish_name FROM caught_fish WHERE id = $1
+                """, caught_fish_id)
+            else:
+                item_name = "Unknown Item"
+
             await ctx.send(f"Added {item_name} to the cauldron.", ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error in select_ingredient_handler: {e}")
-            await ctx.send(
-                "An error occurred while adding the ingredient. Please try again.",
-                ephemeral=True
-            )
+            await ctx.send("An error occurred while adding the ingredient. Please try again.", ephemeral=True)
+
 
 
 
