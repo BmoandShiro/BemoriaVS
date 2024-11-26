@@ -16,7 +16,10 @@ class CauldronModule(Extension):
             SELECT playerid FROM players WHERE discord_id = $1
         """, discord_id)
 
-    async def add_ingredient(self, player_id, ingredient_id, quantity):
+    async def add_ingredient(self, player_id, inventory_id, quantity):
+        """
+        Add an ingredient to the cauldron, ensuring the ingredient_id is based on itemid.
+        """
         # Fetch the current location of the player
         location_id = await self.db.fetchval("""
             SELECT current_location
@@ -24,22 +27,39 @@ class CauldronModule(Extension):
             WHERE playerid = $1
         """, player_id)
 
+        # Fetch the itemid from the inventory table using the inventory_id
+        item_id = await self.db.fetchval("""
+            SELECT itemid
+            FROM inventory
+            WHERE inventoryid = $1
+        """, inventory_id)
+
+        if not item_id:
+            raise ValueError(f"Invalid inventory_id {inventory_id}. No associated itemid found.")
+
+        # Check if the ingredient already exists in the cauldron
         existing_entry = await self.db.fetchrow("""
-            SELECT quantity FROM campfire_cauldron
+            SELECT quantity 
+            FROM campfire_cauldron
             WHERE player_id = $1 AND location_id = $2 AND ingredient_id = $3
-        """, player_id, location_id, ingredient_id)
+        """, player_id, location_id, item_id)
 
         if existing_entry:
+            # Update the quantity if the ingredient already exists
             await self.db.execute("""
                 UPDATE campfire_cauldron
                 SET quantity = quantity + $1
                 WHERE player_id = $2 AND location_id = $3 AND ingredient_id = $4
-            """, quantity, player_id, location_id, ingredient_id)
+            """, quantity, player_id, location_id, item_id)
         else:
+            # Insert a new entry if the ingredient does not exist
             await self.db.execute("""
                 INSERT INTO campfire_cauldron (player_id, location_id, ingredient_id, quantity)
                 VALUES ($1, $2, $3, $4)
-            """, player_id, location_id, ingredient_id, quantity)
+            """, player_id, location_id, item_id, quantity)
+
+        logging.info(f"Added item_id {item_id} to the cauldron at location {location_id} for player_id {player_id}.")
+
 
 
     async def validate_cauldron(self, player_id, location_id, recipe_id):
@@ -319,7 +339,7 @@ class CauldronModule(Extension):
             options = [
                 StringSelectOption(
                     label=f"{item['name']} (x{item['effective_quantity']})",
-                    value=str(item['inventoryid'])
+                    value=f"{item['inventoryid']}"  # Send inventory ID as the selected value
                 )
                 for item in filtered_items
             ]
@@ -360,18 +380,21 @@ class CauldronModule(Extension):
 
 
 
+
     @component_callback(re.compile(r"^select_ingredient_\d+_\d+$"))
     async def select_ingredient_handler(self, ctx: ComponentContext):
         """
         Handle ingredient selection to add to the cauldron.
         """
         try:
+            # Extract location_id and player_id from custom_id
             location_id, player_id = map(int, ctx.custom_id.split("_")[-2:])
-            selected_item_id = int(ctx.values[0])
+            inventory_id = int(ctx.values[0])  # Dropdown sends inventoryid
 
-            # Fetch the recipe_id for the player's selected recipe
+            # Fetch the recipe_id for the selected recipe
             recipe_id = await self.db.fetchval("""
-                SELECT recipe_id FROM campfire_cauldron
+                SELECT recipe_id
+                FROM campfire_cauldron
                 WHERE player_id = $1 AND location_id = $2
             """, player_id, location_id)
 
@@ -381,19 +404,16 @@ class CauldronModule(Extension):
                     ephemeral=True
                 )
 
-            # Check if the player has the selected item in their inventory
+            # Fetch the itemid from inventory table using the inventory_id
             item = await self.db.fetchrow("""
-                SELECT itemid, quantity, caught_fish_id, 
+                SELECT itemid, quantity, caught_fish_id,
                        CASE 
                            WHEN caught_fish_id IS NOT NULL THEN 1
                            ELSE quantity
                        END AS effective_quantity
                 FROM inventory
                 WHERE playerid = $1 AND inventoryid = $2
-            """, player_id, selected_item_id)
-
-            # Log the item details for debugging
-            logging.info(f"Player {player_id}, Location {location_id}, Selected Item: {item}")
+            """, player_id, inventory_id)
 
             if not item:
                 return await ctx.send("You do not have this item in your inventory.", ephemeral=True)
@@ -401,17 +421,18 @@ class CauldronModule(Extension):
             # Check if the player has enough of the selected item
             if item['effective_quantity'] <= 0:
                 logging.warning(
-                    f"Player {player_id} does not have enough of item ID {item['itemid']} (Effective Quantity: {item['effective_quantity']})."
+                    f"Player {player_id} does not have enough of item ID {item['itemid']} "
+                    f"(Effective Quantity: {item['effective_quantity']})."
                 )
                 return await ctx.send("You do not have enough of this item to add.", ephemeral=True)
 
-            # Add the selected item to the cauldron or update its quantity
+            # Add the item to the cauldron or update its quantity
             await self.db.execute("""
                 INSERT INTO campfire_cauldron (player_id, location_id, recipe_id, ingredient_id, quantity)
                 VALUES ($1, $2, $3, $4, $5)
                 ON CONFLICT (player_id, location_id, ingredient_id)
                 DO UPDATE SET quantity = campfire_cauldron.quantity + EXCLUDED.quantity
-            """, player_id, location_id, recipe_id, selected_item_id, 1)
+            """, player_id, location_id, recipe_id, item['itemid'], 1)
 
             # Log successful addition to the cauldron
             logging.info(
@@ -423,13 +444,19 @@ class CauldronModule(Extension):
                 UPDATE inventory
                 SET quantity = quantity - 1
                 WHERE playerid = $1 AND inventoryid = $2
-            """, player_id, selected_item_id)
+            """, player_id, inventory_id)
 
-            await ctx.send(f"Added {await self.get_item_name(selected_item_id)} to the cauldron.", ephemeral=True)
+            # Get the item name for confirmation
+            item_name = await self.get_item_name(item['itemid'])
+            await ctx.send(f"Added {item_name} to the cauldron.", ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error in select_ingredient_handler: {e}")
-            await ctx.send("An error occurred while adding the ingredient. select ingredient.", ephemeral=True)
+            await ctx.send(
+                "An error occurred while adding the ingredient. Please try again.",
+                ephemeral=True
+            )
+
 
 
 
