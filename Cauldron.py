@@ -62,35 +62,7 @@ class CauldronModule(Extension):
 
 
 
-    '''async def validate_cauldron(self, player_id, location_id, recipe_id):
-        """
-        Validate ingredients in the cauldron for a given recipe.
-        """
-        cauldron_items = await self.db.fetch("""
-            SELECT ingredient_id, quantity FROM campfire_cauldron
-            WHERE player_id = $1 AND location_id = $2
-        """, player_id, location_id)
-
-        recipe = await self.db.fetchrow("""
-            SELECT * FROM recipes WHERE recipeid = $1
-        """, recipe_id)
-
-        if not recipe:
-            return False, "Recipe not found."
-
-        for i in range(1, 7):
-            ingredient_id = recipe[f'ingredient{i}_itemid']
-            quantity_required = recipe[f'quantity{i}_required']
-
-            if ingredient_id and quantity_required:
-                cauldron_quantity = next(
-                    (item['quantity'] for item in cauldron_items if item['ingredient_id'] == ingredient_id),
-                    0
-                )
-                if cauldron_quantity < quantity_required:
-                    return False, f"Missing ingredient: {await self.get_item_name(ingredient_id)}"
-
-        return True, None'''
+   
 
     async def get_item_name(self, item_id):
         """
@@ -100,20 +72,7 @@ class CauldronModule(Extension):
             SELECT name FROM items WHERE itemid = $1
         """, item_id)
 
-    '''@component_callback(re.compile(r"^cauldron_validate_\d+$"))
-    async def validate_cauldron_handler(self, ctx: ComponentContext):
-        """
-        Handle ingredient validation for a cauldron.
-        """
-        player_id = await self.get_player_id(ctx.author.id)
-        location_id = await self.bot.travel_system.get_player_location(player_id)
-        recipe_id = int(ctx.custom_id.split("_")[-1])
-
-        valid, error = await self.validate_cauldron(player_id, location_id, recipe_id)
-        if valid:
-            await ctx.send("Ingredients are valid! Ready to cook.", ephemeral=True)
-        else:
-            await ctx.send(f"Validation failed: {error}", ephemeral=True)'''
+    
 
     async def remove_ingredient(self, player_id, location_id, ingredient_id, quantity):
         """
