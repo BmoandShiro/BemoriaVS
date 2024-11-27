@@ -600,15 +600,13 @@ class CauldronModule(Extension):
                 await ctx.send("Invalid recipe. Please select a valid recipe.", ephemeral=True)
                 return
 
-            # Fetch the current cauldron contents
+            # Fetch and aggregate the current cauldron contents
             cauldron_contents = await self.db.fetch("""
-                SELECT ingredient_id, caught_fish_id, quantity
+                SELECT ingredient_id, caught_fish_id, SUM(quantity) AS total_quantity
                 FROM campfire_cauldron
                 WHERE player_id = $1 AND location_id = $2
+                GROUP BY ingredient_id, caught_fish_id
             """, player_id, location_id)
-
-            # Ensure cauldron_contents is a list for safe iteration
-            cauldron_contents = list(cauldron_contents)
 
             # Validate required ingredients
             for i in range(1, 7):
@@ -620,7 +618,7 @@ class CauldronModule(Extension):
                         (item for item in cauldron_contents if item['ingredient_id'] == ingredient_id),
                         None
                     )
-                    if not cauldron_item or cauldron_item['quantity'] < quantity_required:
+                    if not cauldron_item or cauldron_item['total_quantity'] < quantity_required:
                         missing_item_name = await self.get_item_name(ingredient_id)
                         await ctx.send(
                             f"Missing or insufficient quantity for ingredient: {missing_item_name}.",
@@ -649,13 +647,12 @@ class CauldronModule(Extension):
                         ]
 
                     # Check if sufficient quantity is available
-                    if not matching_fish or sum(f['quantity'] for f in matching_fish) < 1:
+                    if not matching_fish or sum(f['total_quantity'] for f in matching_fish) < 1:
                         await ctx.send(
                             f"Missing required fish: {fish_name}.",
                             ephemeral=True
                         )
                         return
-
 
             # If validation succeeds, cook the dish
             dish_itemid = await self.db.fetchval("""
@@ -678,12 +675,12 @@ class CauldronModule(Extension):
                 WHERE player_id = $1 AND location_id = $2
             """, player_id, location_id)
 
+            # Notify the user of success
             await ctx.send(f"You successfully cooked {await self.get_item_name(dish_itemid)}!", ephemeral=True)
 
         except Exception as e:
             logging.error(f"Error in light_flame_handler: {e}")
             await ctx.send("An error occurred while lighting the flame. Please try again.", ephemeral=True)
-
 
 
 
