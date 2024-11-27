@@ -591,7 +591,8 @@ class CauldronModule(Extension):
                        ingredient4_itemid, ingredient5_itemid, ingredient6_itemid,
                        quantity1_required, quantity2_required, quantity3_required,
                        quantity4_required, quantity5_required, quantity6_required,
-                       caught_fish_name1, caught_fish_name2, caught_fish_name3
+                       caught_fish_name1, caught_fish_name2, caught_fish_name3,
+                       caught_fish_1_quantity, caught_fish_2_quantity, caught_fish_3_quantity
                 FROM recipes
                 WHERE recipeid = $1
             """, recipe_id)
@@ -627,29 +628,26 @@ class CauldronModule(Extension):
                         return
 
             # Validate required caught fish
-            for i in range(1, 4):
+            for i in range(1, 4):  # Loop through caught_fish_name1, caught_fish_name2, caught_fish_name3
                 fish_name = recipe.get(f'caught_fish_name{i}')
+                fish_quantity_required = recipe.get(f'caught_fish_{i}_quantity')
 
-                if fish_name:
-                    if fish_name.lower() == "any":
-                        # Match any fish in the cauldron with a caught_fish_id
-                        matching_fish = [
-                            item for item in cauldron_contents if item['caught_fish_id']
-                        ]
-                    else:
-                        # Match fish with a specific name
-                        matching_fish = [
-                            item for item in cauldron_contents if item['caught_fish_id']
-                            and await self.db.fetchval(
-                                "SELECT fish_name FROM caught_fish WHERE id = $1",
-                                item['caught_fish_id']
-                            ) == fish_name
-                        ]
+                if fish_name and fish_quantity_required:
+                    # Match any fish or specific fish name
+                    matching_fish = [
+                        item for item in cauldron_contents if item['caught_fish_id']
+                        and (fish_name.lower() == "any" or await self.db.fetchval(
+                            "SELECT fish_name FROM caught_fish WHERE id = $1", item['caught_fish_id']
+                        ) == fish_name)
+                    ]
 
-                    # Check if sufficient quantity is available
-                    if not matching_fish or sum(f['total_quantity'] for f in matching_fish) < 1:
+                    # Sum the total quantity of matching fish
+                    total_matching_quantity = sum(item['total_quantity'] for item in matching_fish)
+
+                    # Check if the total quantity meets the requirement
+                    if total_matching_quantity < fish_quantity_required:
                         await ctx.send(
-                            f"Missing required fish: {fish_name}.",
+                            f"Missing or insufficient quantity for fish: {fish_name}. You need {fish_quantity_required}, but only {total_matching_quantity} is in the cauldron.",
                             ephemeral=True
                         )
                         return
