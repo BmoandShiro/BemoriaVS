@@ -423,33 +423,40 @@ class BattleSystem(Extension):
             damage_resistance_mapping = self.get_damage_resistance_mapping()
 
             # Iterate through damage types explicitly set in the ability
-            for damage_col, resistance_col in damage_resistance_mapping.items():
-                ability_damage = player_ability.get(damage_col, 0)
-                if ability_damage == 0:  # Skip damage types with no value
-                    continue
+            for damage_type, (min_col, max_col, resistance_col) in self.get_damage_resistance_mapping().items():
+                min_damage = player_ability.get(min_col, 0)
+                max_damage = player_ability.get(max_col, 0)
 
-                player_damage_modifier = player_data.get(damage_col, 0)
-                enemy_resistance = enemy.get(resistance_col, 0)
+                if min_damage > 0 and max_damage > 0:
+                    ability_damage = random.randint(min_damage, max_damage)  # Roll within the range
+                    player_damage_modifier = player_data.get(f"{damage_type}_damage", 0)
+                    enemy_resistance = enemy.get(resistance_col, 0)
 
-                # Handle resistance: Negative increases damage, positive reduces damage
-                if enemy_resistance < 0:
-                    effective_damage = max(0, (ability_damage + player_damage_modifier) - enemy_resistance)
-                else:
-                    effective_damage = max(0, (ability_damage + player_damage_modifier) - enemy_resistance)
+                    # Debugging: Log the rolled value
+                    logging.info(f"Rolled {damage_type}_damage: {ability_damage}")
 
-                # Add to total damage
-                total_damage += effective_damage
+                    # Handle resistance: Negative resistance increases damage, positive reduces it
+                    if enemy_resistance < 0:
+                        effective_damage = max(0, (ability_damage + player_damage_modifier) - enemy_resistance)
+                    else:
+                        effective_damage = max(0, (ability_damage + player_damage_modifier) - enemy_resistance)
+
+                    # Debugging: Log the effective damage
+                    logging.info(f"Effective {damage_type}_damage after resistance: {effective_damage}")
+
+                    total_damage += effective_damage
+
 
             # Apply total damage to the enemy
             enemy_health = max(0, self.active_battles[player_id]['enemy_health'] - total_damage)
             self.active_battles[player_id]['enemy_health'] = enemy_health
 
-            # Notify player
             await ctx.send(
-                f"You used {player_ability['name']} and dealt {total_damage:.1f} damage to {enemy['name']}. "
-                f"Remaining enemy health: {enemy_health}.",
+                f"You used {player_ability['name']} and dealt {total_damage:.1f} damage "
+                f"to {enemy['name']} (rolled {ability_damage}). Remaining enemy health: {enemy_health}.",
                 ephemeral=True
             )
+
 
             # Check for combat end
             await self.handle_combat_end(ctx, player_id, enemy)
@@ -585,20 +592,21 @@ class BattleSystem(Extension):
     @staticmethod
     def get_damage_resistance_mapping():
         return {
-            'fire_damage': 'fire_resistance',
-            'ice_damage': 'ice_resistance',
-            'lightning_damage': 'lightning_resistance',
-            'poison_damage': 'poison_resistance',
-            'magic_damage': 'magic_resistance',
-            'crushing_damage': 'crushing_resistance',
-            'piercing_damage': 'piercing_resistance',
-            'water_damage': 'water_resistance',
-            'earth_damage': 'earth_resistance',
-            'light_damage': 'light_resistance',
-            'dark_damage': 'dark_resistance',
-            'air_damage': 'air_resistance',
-            'corrosive_damage': 'corrosive_resistance',
+            'fire': ('fire_damage_min', 'fire_damage_max', 'fire_resistance'),
+            'ice': ('ice_damage_min', 'ice_damage_max', 'ice_resistance'),
+            'lightning': ('lightning_damage_min', 'lightning_damage_max', 'lightning_resistance'),
+            'poison': ('poison_damage_min', 'poison_damage_max', 'poison_resistance'),
+            'magic': ('magic_damage_min', 'magic_damage_max', 'magic_resistance'),
+            'crushing': ('crushing_damage_min', 'crushing_damage_max', 'crushing_resistance'),
+            'piercing': ('piercing_damage_min', 'piercing_damage_max', 'piercing_resistance'),
+            'water': ('water_damage_min', 'water_damage_max', 'water_resistance'),
+            'earth': ('earth_damage_min', 'earth_damage_max', 'earth_resistance'),
+            'light': ('light_damage_min', 'light_damage_max', 'light_resistance'),
+            'dark': ('dark_damage_min', 'dark_damage_max', 'dark_resistance'),
+            'air': ('air_damage_min', 'air_damage_max', 'air_resistance'),
+            'corrosive': ('corrosive_damage_min', 'corrosive_damage_max', 'corrosive_resistance'),
         }
+
 
 # Setup function to load this as an extension
 def setup(bot):
