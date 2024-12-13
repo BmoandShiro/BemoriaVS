@@ -403,6 +403,19 @@ class BattleSystem(Extension):
             # Notify the player about mana deduction
             logging.info(f"Player {player_id} cast {player_ability['name']} (Mana Cost: {mana_cost}). Remaining Mana: {updated_mana}")
 
+             # Calculate hit chance
+            scaling_attribute = player_ability['scaling_attribute']
+            player_roll = self.roll_dice() + player_data.get(scaling_attribute, 0)
+            enemy_roll = self.roll_dice() + enemy['agility']
+
+            if player_roll < enemy_roll:
+                # Ability missed
+                await ctx.send(f"You tried to use {player_ability['name']} but {enemy['name']} dodged it!", ephemeral=True)
+                # Proceed to enemy's turn even if dodged
+                await self.enemy_attack(ctx, player_id, enemy)
+                return
+
+            
             # Initialize total damage
             total_damage = 0
 
