@@ -171,6 +171,9 @@ async def on_shutdown():
 
 async def on_component(ctx: ComponentContext):
     logging.info(f"Component interaction received: custom_id={ctx.custom_id}")
+    
+    # Send a fallback response if no handler is found
+    await ctx.send(f"Unhandled interaction with custom_id: {ctx.custom_id}", ephemeral=True)
 
 # Start the bot with the specified token
 bot.start()  # Note: Use start() instead of run()
