@@ -2,6 +2,7 @@ from interactions import SlashContext, Extension, Button, ButtonStyle, Component
 import random
 import asyncio
 import re
+import logging
 
 class BattleSystem(Extension):
     def __init__(self, bot):
@@ -369,101 +370,80 @@ class BattleSystem(Extension):
     @component_callback(re.compile(r"^cast_ability_\d+_\d+_\d+$"))
     async def cast_ability_handler(self, ctx: ComponentContext):
         try:
-            # Corrected version for handling the custom ID
-            parts = ctx.custom_id.split("_")
-            if len(parts) != 5 or parts[0] != "cast" or parts[1] != "ability":
-                await ctx.send("Error: Invalid button ID format.", ephemeral=True)
-                return
-
             # Parse player ID, enemy ID, and ability ID
+            parts = ctx.custom_id.split("_")
             player_id = int(parts[2])
             enemy_id = int(parts[3])
             ability_id = int(parts[4])
 
+            # Fetch player, ability, and enemy data
+            player_data = await self.db.fetchrow("SELECT * FROM player_data WHERE playerid = $1", player_id)
+            player_ability = await self.db.fetchrow("SELECT * FROM abilities WHERE ability_id = $1", ability_id)
+            enemy = await self.db.fetchrow("SELECT * FROM enemies WHERE enemyid = $1", enemy_id)
 
-            # Debugging to verify what's happening
-            print(f"[Debug] Custom ID: {ctx.custom_id}")
-    
-            print(f"[Debug] Parsed IDs -> Player ID: {player_id}, Enemy ID: {enemy_id}, Ability ID: {ability_id}")
-            # Fetch player data using the Discord ID to verify identity
-            player_data = await self.db.fetchrow("""
-                SELECT playerid FROM players
-                WHERE discord_id = $1
-            """, ctx.author.id)
-
-            if not player_data:
-                await ctx.send("Error: Player not found.", ephemeral=True)
+            if not (player_data and player_ability and enemy):
+                await ctx.send("Error: Missing required data for the ability.", ephemeral=True)
                 return
 
-            # Extract the actual player ID from the database
-            actual_player_id = player_data['playerid']
-
-            # Compare player ID from the button with the actual player ID retrieved from the database
-            if player_id != actual_player_id:
-                await ctx.send("You are not authorized to use this ability.", ephemeral=True)
-                return
-
-            # Proceed if authorized
-            await ctx.defer(ephemeral=True)
-
-            # Fetch the chosen ability
-            player_ability = await self.db.fetchrow("""
-                SELECT * FROM abilities
-                WHERE ability_id = $1
-            """, ability_id)
-
-            if not player_ability:
-                await ctx.send("Error: Unable to retrieve ability data.", ephemeral=True)
-                return
-
-            # Fetch the enemy details
-            enemy = await self.db.fetchrow("""
-                SELECT * FROM enemies
-                WHERE enemyid = $1
-            """, enemy_id)
-
-            if not enemy:
-                await ctx.send("Error: Unable to retrieve enemy data.", ephemeral=True)
-                return
-
-            # Calculate ability effect
+            # Initialize total damage
             total_damage = 0
-            scaling_attribute = player_ability['scaling_attribute']
-            scaling_value = player_data.get(scaling_attribute, 0)
 
-            # Calculate total damage based on resistances and attributes
-            for damage_type in ['physical', 'fire', 'ice', 'lightning', 'poison', 'magic', 'crushing', 'piercing', 'water', 'earth', 'light', 'dark', 'air', 'corrosive']:
-                damage = player_ability.get(f'{damage_type}_damage', 0) + scaling_value
-                resistance = enemy.get(f'{damage_type}_resistance', 0)
-                damage_after_resistance = max(0, damage * (1 - resistance / 100.0))
-                total_damage += damage_after_resistance
+            # Use the static method to get damage-resistance mapping
+            damage_resistance_mapping = self.get_damage_resistance_mapping()
 
-            # Apply total damage to enemy
-            enemy_health = self.active_battles[player_id]['enemy_health'] - total_damage
-            enemy_health = max(0, enemy_health)  # Ensure health doesn't go negative
+            # Iterate through damage types explicitly set in the ability
+            for damage_col, resistance_col in damage_resistance_mapping.items():
+                ability_damage = player_ability.get(damage_col, 0)
+                if ability_damage == 0:  # Skip damage types with no value
+                    continue
 
-            # Update the enemy's health in the active battle state
+                player_damage_modifier = player_data.get(damage_col, 0)
+                enemy_resistance = enemy.get(resistance_col, 0)
+
+                # Debugging: Log the raw values
+                logging.info(
+                    f"Calculating {damage_col}: Ability Damage = {ability_damage}, "
+                    f"Modifier = {player_damage_modifier}, Resistance = {enemy_resistance}"
+                )
+
+                # Handle resistance: Negative increases damage, positive reduces damage
+                if enemy_resistance < 0:
+                    effective_damage = max(0, (ability_damage + player_damage_modifier) - enemy_resistance)
+                else:
+                    effective_damage = max(0, (ability_damage + player_damage_modifier) - enemy_resistance)
+
+                # Debugging: Log the effective damage calculation
+                logging.info(f"Effective damage for {damage_col}: {effective_damage}")
+
+                # Add to total damage
+                total_damage += effective_damage
+
+            # Apply total damage to the enemy
+            enemy_health = max(0, self.active_battles[player_id]['enemy_health'] - total_damage)
             self.active_battles[player_id]['enemy_health'] = enemy_health
 
-            # Send the result message
-            if total_damage > 0:
-                await ctx.send(f"You used {player_ability['name']} and dealt {total_damage:.1f} damage to {enemy['name']}. Remaining enemy health: {enemy_health:.1f}", ephemeral=True)
-            else:
-                await ctx.send(f"You used {player_ability['name']} but it had no effect on {enemy['name']}.", ephemeral=True)
+            # Notify player
+            await ctx.send(
+                f"You used {player_ability['name']} and dealt {total_damage:.1f} damage to {enemy['name']}. "
+                f"Remaining enemy health: {enemy_health}.",
+                ephemeral=True
+            )
 
-            # Check if either the enemy or player has reached zero health
-            await self.handle_combat_end(ctx, actual_player_id, enemy)
+            # Check for combat end
+            await self.handle_combat_end(ctx, player_id, enemy)
 
-            # If combat has not ended, proceed with enemy attack
+            # Enemy counterattack if still alive
             if enemy_health > 0:
-                await self.enemy_attack(ctx, actual_player_id, enemy)
-                # Check if either the enemy or player has reached zero health again after the enemy attack
-                await self.handle_combat_end(ctx, actual_player_id, enemy)
+                await self.enemy_attack(ctx, player_id, enemy)
 
-        except (ValueError, IndexError) as e:
-            # Handle any parsing issues
-            print(f"[Error] Failed to parse ability casting interaction: {e}")
-            await ctx.send("Error: Could not process ability interaction.", ephemeral=True)
+        except Exception as e:
+            logging.error(f"Error in cast_ability_handler: {e}")
+            await ctx.send("An error occurred while using the ability.", ephemeral=True)
+
+
+
+
+
 
 
         
@@ -578,6 +558,25 @@ class BattleSystem(Extension):
             'luck': entity.get('luck', 0),
             'corrosive_damage': entity.get('corrosive_damage', 0)
         }
+    
+    @staticmethod
+    def get_damage_resistance_mapping():
+        return {
+            'fire_damage': 'fire_resistance',
+            'ice_damage': 'ice_resistance',
+            'lightning_damage': 'lightning_resistance',
+            'poison_damage': 'poison_resistance',
+            'magic_damage': 'magic_resistance',
+            'crushing_damage': 'crushing_resistance',
+            'piercing_damage': 'piercing_resistance',
+            'water_damage': 'water_resistance',
+            'earth_damage': 'earth_resistance',
+            'light_damage': 'light_resistance',
+            'dark_damage': 'dark_resistance',
+            'air_damage': 'air_resistance',
+            'corrosive_damage': 'corrosive_resistance',
+        }
+
 # Setup function to load this as an extension
 def setup(bot):
     BattleSystem(bot)
