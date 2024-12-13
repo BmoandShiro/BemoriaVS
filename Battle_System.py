@@ -191,50 +191,49 @@ class BattleSystem(Extension):
         """, player_id)
 
         if player_id not in self.active_battles:
-            return
+            return  # If no active battle, stop further processing
 
         player_health = player_stats['health']
         enemy_health = self.active_battles[player_id]['enemy_health']
 
-        # If both are nearing zero, determine by agility who strikes first
+        # Handle case where both are near zero
         if player_health <= 0 and enemy_health <= 0:
             player_agility = player_stats['agility']
             enemy_agility = enemy['agility']
 
-            if player_agility > enemy_agility:
-                # Player wins because they are faster
-                await ctx.send(f"You defeated {enemy['name']} before they could strike!", ephemeral=True)
+            if player_agility >= enemy_agility:
+                # Player wins
+                await ctx.send(f"You defeated {enemy['name']} just in time!", ephemeral=True)
                 await self.handle_enemy_defeat(ctx, player_id, enemy['enemyid'])
             else:
-                # Enemy wins because they are faster
-                await ctx.send(f"{enemy['name']} defeated you before you could strike!", ephemeral=True)
-                # Update player's health to zero in the database
+                # Enemy wins
+                await ctx.send(f"{enemy['name']} defeated you just before your strike!", ephemeral=True)
                 await self.db.execute("""
                     UPDATE player_data
                     SET health = $1
                     WHERE playerid = $2
                 """, 0, player_id)
-            # End the combat and clean up
             del self.active_battles[player_id]
             return
 
-        # Handle case if only the enemy is defeated
+        # Handle case where only the enemy is defeated
         if enemy_health <= 0:
             await ctx.send(f"{enemy['name']} has been defeated!", ephemeral=True)
             await self.handle_enemy_defeat(ctx, player_id, enemy['enemyid'])
-            # Reset the enemy health in the active battle data
-            del self.active_battles[player_id]  # Remove the battle as it's over
+            del self.active_battles[player_id]
+            return
 
-        # Handle case if only the player is defeated
-        elif player_health <= 0:
+        # Handle case where only the player is defeated
+        if player_health <= 0:
             await ctx.send("You have been defeated!", ephemeral=True)
-            # Update player's health to zero in the database
             await self.db.execute("""
                 UPDATE player_data
                 SET health = $1
                 WHERE playerid = $2
             """, 0, player_id)
-            del self.active_battles[player_id]  # Remove the battle as it's over
+            del self.active_battles[player_id]
+            return
+
 
         # Ensure enemy's health is reset after a battle if they were defeated
         if enemy_health <= 0:
@@ -451,7 +450,7 @@ class BattleSystem(Extension):
 
 
 
-    async def handle_combat_end(self, ctx, player_id, enemy):
+    '''async def handle_combat_end(self, ctx, player_id, enemy):
         """Handles the ending of combat when either the player or enemy reaches zero health."""
         # Fetch updated player and enemy health
         player_stats = await self.db.fetchrow("""
@@ -477,7 +476,7 @@ class BattleSystem(Extension):
                 SET health = $1
                 WHERE playerid = $2
             """, 0, player_id)
-            del self.active_battles[player_id]  # Remove the battle as it's over
+            del self.active_battles[player_id]  # Remove the battle as it's over'''
 
 
 
