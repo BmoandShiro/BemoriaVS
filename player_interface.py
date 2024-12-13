@@ -18,21 +18,28 @@ class playerinterface(Extension):
     async def send_player_ui(self, ctx, location_name, health, mana, stamina, current_location_id, gold_balance):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
-        
+    
         current_inventory_count = await db.get_current_inventory_count(player_id)
         max_inventory_capacity = await db.get_inventory_capacity(player_id)
+
+        # Fetch max_health, max_mana, and max_stamina from the database
+        max_stats = await db.fetchrow("""
+            SELECT max_health, max_mana, max_stamina
+            FROM player_data
+            WHERE playerid = $1
+        """, player_id)
 
         embed = Embed(
             title="Player Information",
             description=f"You are currently in {location_name}",
             color=0x00FF00
         )
-        embed.add_field(name="Health", value=str(health), inline=True)
-        embed.add_field(name="Mana", value=str(mana), inline=True)
-        embed.add_field(name="Stamina", value=str(stamina), inline=True)
+        embed.add_field(name="Health", value=f"{health}/{max_stats['max_health']}", inline=True)
+        embed.add_field(name="Mana", value=f"{mana}/{max_stats['max_mana']}", inline=True)
+        embed.add_field(name="Stamina", value=f"{stamina}/{max_stats['max_stamina']}", inline=True)
         embed.add_field(name="Inventory Capacity", value=f"{current_inventory_count}/{max_inventory_capacity}", inline=True)
         embed.add_field(name="Gold", value=f"{gold_balance} gold", inline=True)  # Add gold information here
-        
+    
         user_id = ctx.author.id  # This is the Discord User ID
 
         # Static buttons with user ID in custom_id to link them to the player who requested the UI
@@ -60,7 +67,7 @@ class playerinterface(Extension):
 
         # Send the embed with the buttons arranged in rows
         await ctx.send(embeds=[embed], components=button_rows, ephemeral=False)
-        
+
 
 
 

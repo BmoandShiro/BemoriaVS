@@ -384,6 +384,25 @@ class BattleSystem(Extension):
                 await ctx.send("Error: Missing required data for the ability.", ephemeral=True)
                 return
 
+            # Check if the player has enough mana to cast the ability
+            mana_cost = player_ability.get('mana_cost', 0)
+            current_mana = player_data.get('mana', 0)
+
+            if current_mana < mana_cost:
+                await ctx.send(f"You do not have enough mana to cast {player_ability['name']}! (Required: {mana_cost}, Available: {current_mana})", ephemeral=True)
+                return
+
+            # Deduct mana cost and update the player_data table
+            updated_mana = current_mana - mana_cost
+            await self.db.execute("""
+                UPDATE player_data
+                SET mana = $1
+                WHERE playerid = $2
+            """, updated_mana, player_id)
+
+            # Notify the player about mana deduction
+            logging.info(f"Player {player_id} cast {player_ability['name']} (Mana Cost: {mana_cost}). Remaining Mana: {updated_mana}")
+
             # Initialize total damage
             total_damage = 0
 
@@ -399,20 +418,11 @@ class BattleSystem(Extension):
                 player_damage_modifier = player_data.get(damage_col, 0)
                 enemy_resistance = enemy.get(resistance_col, 0)
 
-                # Debugging: Log the raw values
-                logging.info(
-                    f"Calculating {damage_col}: Ability Damage = {ability_damage}, "
-                    f"Modifier = {player_damage_modifier}, Resistance = {enemy_resistance}"
-                )
-
                 # Handle resistance: Negative increases damage, positive reduces damage
                 if enemy_resistance < 0:
                     effective_damage = max(0, (ability_damage + player_damage_modifier) - enemy_resistance)
                 else:
                     effective_damage = max(0, (ability_damage + player_damage_modifier) - enemy_resistance)
-
-                # Debugging: Log the effective damage calculation
-                logging.info(f"Effective damage for {damage_col}: {effective_damage}")
 
                 # Add to total damage
                 total_damage += effective_damage
@@ -438,6 +448,7 @@ class BattleSystem(Extension):
         except Exception as e:
             logging.error(f"Error in cast_ability_handler: {e}")
             await ctx.send("An error occurred while using the ability.", ephemeral=True)
+
 
 
 
