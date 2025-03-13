@@ -71,7 +71,7 @@ class PartySystem(Extension):
 
         # Create new party
         party = await self.db.fetchrow("""
-            INSERT INTO parties (leader_id, name, max_size, is_active)
+            INSERT INTO parties (leader_id, party_name, max_size, is_active)
             VALUES ($1, $2, 4, true)
             RETURNING *
         """, player_id, f"{ctx.author.display_name}'s Party")
@@ -82,7 +82,27 @@ class PartySystem(Extension):
             VALUES ($1, $2, 'leader')
         """, party['party_id'], player_id)
 
-        await ctx.send(f"Party '{party['name']}' created! You are the leader.", ephemeral=True)
+        await ctx.send(f"Party '{party['party_name']}' created! You are the leader.", ephemeral=True)
+        
+        # Create updated party menu buttons
+        party_info_button = Button(
+            style=ButtonStyle.PRIMARY,
+            label="Party Info",
+            custom_id=f"party_info_{player_id}"
+        )
+        
+        disband_button = Button(
+            style=ButtonStyle.DANGER,
+            label="Disband Party",
+            custom_id=f"party_disband_{player_id}"
+        )
+        
+        # Send updated menu
+        await ctx.send(
+            "Party Management:",
+            components=[[party_info_button, disband_button]],
+            ephemeral=True
+        )
 
     async def show_invite_menu(self, ctx: SlashContext, player_id: int):
         # Check if player is party leader
@@ -209,9 +229,9 @@ class PartySystem(Extension):
                 pm.player_id,
                 pm.role,
                 pm.ready_status,
-                pd.username,
+                pd.username as username,
                 pd.level,
-                pd.class_name
+                pd.class
             FROM parties p
             JOIN party_members pm ON p.party_id = pm.party_id
             JOIN player_data pd ON pm.player_id = pd.playerid
@@ -237,7 +257,7 @@ class PartySystem(Extension):
             leader_star = "👑 " if member['player_id'] == member['leader_id'] else ""
             embed.add_field(
                 name=f"{leader_star}{member['username']} ({member['role']})",
-                value=f"Level {member['level']} {member['class_name']}\nReady: {status}",
+                value=f"Level {member['level']} {member['class']}\nReady: {status}",
                 inline=True
             )
 
@@ -310,6 +330,18 @@ class PartySystem(Extension):
 
         if all_ready:
             await ctx.send("All party members are ready! You can now start a battle.", ephemeral=True)
+
+    async def get_player_party_info(self, player_id: int):
+        """Get party information for a player."""
+        # Get the player's current party and role
+        party_info = await self.db.fetchrow("""
+            SELECT p.*, pm.role
+            FROM parties p
+            JOIN party_members pm ON p.party_id = pm.party_id
+            WHERE pm.player_id = $1 AND p.is_active = true
+        """, player_id)
+
+        return dict(party_info) if party_info else None
 
     @slash_command(name="party_invite", description="Invite a player to your party")
     @slash_option(
@@ -467,6 +499,42 @@ class PartySystem(Extension):
         """, target_id)
 
         await ctx.send(f"Kicked {kicked_player['username']} from the party.", ephemeral=True)
+
+    @component_callback(re.compile(r"^party_info_\d+$"))
+    async def handle_party_info_button(self, ctx):
+        player_id = int(ctx.custom_id.split("_")[2])
+        
+        # Verify the user's identity
+        discord_id = await self.db.get_discord_id(player_id)
+        if ctx.author.id != discord_id:
+            await ctx.send("You are not authorized to view this party's information.", ephemeral=True)
+            return
+            
+        await self.show_party_info(ctx, player_id)
+
+    @component_callback(re.compile(r"^party_disband_\d+$"))
+    async def handle_party_disband_button(self, ctx):
+        player_id = int(ctx.custom_id.split("_")[2])
+        
+        # Verify the user's identity
+        discord_id = await self.db.get_discord_id(player_id)
+        if ctx.author.id != discord_id:
+            await ctx.send("You are not authorized to disband this party.", ephemeral=True)
+            return
+            
+        await self.disband_party(ctx, player_id)
+
+    @component_callback(re.compile(r"^party_create_\d+$"))
+    async def handle_party_create_button(self, ctx):
+        player_id = int(ctx.custom_id.split("_")[2])
+        
+        # Verify the user's identity
+        discord_id = await self.db.get_discord_id(player_id)
+        if ctx.author.id != discord_id:
+            await ctx.send("You are not authorized to create a party.", ephemeral=True)
+            return
+            
+        await self.create_party(ctx, player_id)
 
 def setup(bot):
     """Setup function to add the extension to the bot."""

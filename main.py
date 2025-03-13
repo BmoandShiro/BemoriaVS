@@ -50,6 +50,8 @@ logging.info("Loading extensions...")
 # Initialize DynamicNPCModule early in the setup process
 setup_dynamic_npc(bot)
 
+# Initialize and attach PartySystem first
+bot.party_system = party_system_setup(bot)  # Store the returned PartySystem instance
 
 # When setting up the bot, make sure the CharacterCreation class is defined to accept a bot and a db instance
 # Load your extensions here
@@ -66,9 +68,6 @@ bot.inventory_system = inventory_system
 # Create and attach the TravelSystem instance to the bot idk why this worked but it did so read into this more
 travel_system = TravelSystem(bot)
 bot.travel_system = travel_system
-
-# Initialize and attach PartySystem
-party_system_setup(bot)  # Use the setup function instead of direct instantiation
 
 #woodcutting_setup(bot)
 bot.woodcutting_module = WoodcuttingModule(bot)

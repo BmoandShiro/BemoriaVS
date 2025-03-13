@@ -216,9 +216,12 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetchval(query, *args)
 
-
-
-
+    async def get_discord_id(self, player_id):
+        """Get the Discord ID for a given player ID."""
+        return await self.fetchval(
+            "SELECT discord_id FROM players WHERE playerid = $1",
+            player_id
+        )
 
     async def get_inventory_capacity(self, player_id):
         """Fetch the maximum inventory slots a player has."""
