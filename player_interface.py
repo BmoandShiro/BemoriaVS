@@ -254,6 +254,13 @@ class playerinterface(Extension):
     async def reload_ui_command(self, ctx):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
+
+        # Check if player is in combat by accessing battle_system through extensions
+        battle_system = self.bot.get_ext("Battle_System")
+        if battle_system and player_id in battle_system.active_battles:
+            await ctx.send("You cannot use this command while in combat! Use the flee button if you want to escape.", ephemeral=True)
+            return
+
         player_data = await db.fetchrow("""
             SELECT pd.health, pd.mana, pd.stamina, l.name, pd.current_location, pd.gold_balance
             FROM player_data pd
