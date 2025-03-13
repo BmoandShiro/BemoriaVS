@@ -27,7 +27,6 @@ class PartySystem(Extension):
         opt_type=OptionType.STRING,
         choices=[
             {"name": "create", "value": "create"},
-            {"name": "invite", "value": "invite"},
             {"name": "join", "value": "join"},
             {"name": "leave", "value": "leave"},
             {"name": "disband", "value": "disband"},
@@ -41,8 +40,6 @@ class PartySystem(Extension):
         
         if action == "create":
             await self.create_party(ctx, player_id)
-        elif action == "invite":
-            await self.show_invite_menu(ctx, player_id)
         elif action == "join":
             await self.show_join_menu(ctx, player_id)
         elif action == "leave":
@@ -257,12 +254,10 @@ class PartySystem(Extension):
                 pm.player_id,
                 pm.role,
                 pm.ready_status,
-                pd.username as username,
-                pd.level,
-                pd.class
+                players.discord_id
             FROM parties p
             JOIN party_members pm ON p.party_id = pm.party_id
-            JOIN player_data pd ON pm.player_id = pd.playerid
+            JOIN players ON pm.player_id = players.playerid
             WHERE p.party_id = (
                 SELECT party_id FROM party_members 
                 WHERE player_id = $1
@@ -281,11 +276,15 @@ class PartySystem(Extension):
         )
 
         for member in party_info:
+            # Get Discord member object to get their display name
+            discord_member = ctx.guild.get_member(int(member['discord_id']))
+            username = discord_member.display_name if discord_member else f"Player {member['player_id']}"
+            
             status = "✅" if member['ready_status'] else "❌"
             leader_star = "👑 " if member['player_id'] == member['leader_id'] else ""
             embed.add_field(
-                name=f"{leader_star}{member['username']} ({member['role']})",
-                value=f"Level {member['level']} {member['class']}\nReady: {status}",
+                name=f"{leader_star}{username} ({member['role']})",
+                value=f"Ready: {status}",
                 inline=True
             )
 
@@ -531,13 +530,6 @@ class PartySystem(Extension):
     @component_callback(re.compile(r"^party_info_\d+$"))
     async def handle_party_info_button(self, ctx):
         player_id = int(ctx.custom_id.split("_")[2])
-        
-        # Verify the user's identity
-        discord_id = await self.db.get_discord_id(player_id)
-        if ctx.author.id != discord_id:
-            await ctx.send("You are not authorized to view this party's information.", ephemeral=True)
-            return
-            
         await self.show_party_info(ctx, player_id)
 
     @component_callback(re.compile(r"^party_disband_\d+$"))
