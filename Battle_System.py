@@ -52,20 +52,26 @@ class BattleSystem(Extension):
             color=0xFF0000  # Red color for battle
         )
 
-        attack_button = Button(
-            style=ButtonStyle.PRIMARY,
-            label="Attack",
-            custom_id=f"attack_{player_id}_{enemy['enemyid']}"
-        )
-        ability_button = Button(
-            style=ButtonStyle.SECONDARY,
-            label="Use Ability",
-            custom_id=f"ability_{player_id}_{enemy['enemyid']}"
-        )
+        # Create all action buttons
+        buttons = [
+            Button(
+                style=ButtonStyle.PRIMARY,
+                label="Attack",
+                custom_id=f"attack_{player_id}_{enemy['enemyid']}"
+            ),
+            Button(
+                style=ButtonStyle.SECONDARY,
+                label="Use Ability",
+                custom_id=f"ability_{player_id}_{enemy['enemyid']}"
+            ),
+            Button(
+                style=ButtonStyle.DANGER,
+                label="Flee Battle",
+                custom_id=f"flee_{player_id}_{enemy['enemyid']}"
+            )
+        ]
 
-        components = [[attack_button, ability_button]]
-
-        await ctx.send(embeds=[embed], components=components, ephemeral=True)
+        await ctx.send(embeds=[embed], components=[buttons], ephemeral=True)
 
     async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
         """Start a hunt battle, handling both solo and party cases."""
@@ -1141,20 +1147,112 @@ class BattleSystem(Extension):
                 )
 
         # Create action buttons
-        attack_button = Button(
-            style=ButtonStyle.PRIMARY,
-            label="Attack",
-            custom_id=f"attack_{player_id}_{battle_state['enemies'][0]['enemy_id']}"
-        )
-        ability_button = Button(
-            style=ButtonStyle.SECONDARY,
-            label="Use Ability",
-            custom_id=f"ability_{player_id}_{battle_state['enemies'][0]['enemy_id']}"
-        )
+        buttons = [
+            Button(
+                style=ButtonStyle.PRIMARY,
+                label="Attack",
+                custom_id=f"attack_{player_id}_{battle_state['enemies'][0]['enemy_id']}"
+            ),
+            Button(
+                style=ButtonStyle.SECONDARY,
+                label="Use Ability",
+                custom_id=f"ability_{player_id}_{battle_state['enemies'][0]['enemy_id']}"
+            ),
+            Button(
+                style=ButtonStyle.DANGER,
+                label="Flee Battle",
+                custom_id=f"flee_{player_id}_{battle_state['enemies'][0]['enemy_id']}"
+            )
+        ]
 
-        components = [[attack_button, ability_button]]
+        # Send embed with all buttons in one row
+        await ctx.send(embeds=[embed], components=[buttons], ephemeral=True)
 
-        await ctx.send(embeds=[embed], components=components, ephemeral=True)
+    @component_callback(re.compile(r"^flee_\d+_\d+$"))
+    async def flee_button_handler(self, ctx: ComponentContext):
+        # Extract player ID and enemy ID from the custom ID
+        _, player_id, enemy_id = ctx.custom_id.split("_")
+        player_id, enemy_id = int(player_id), int(enemy_id)
+
+        # Fetch player stats from the view
+        player_stats = await self.db.fetchrow("""
+            SELECT * FROM player_stats_view WHERE playerid = $1
+        """, player_id)
+
+        if not player_stats:
+            await ctx.send("Error: Could not retrieve player stats.", ephemeral=True)
+            return
+
+        player_stats = dict(player_stats)
+
+        if player_id not in self.active_battles:
+            await ctx.send("No active battle found.", ephemeral=True)
+            return
+
+        # Get the current battle data
+        battle_data = self.active_battles[player_id]
+        instance_id = battle_data['instance_id']
+
+        # Get battle state
+        battle_state = await self.get_instance_state(instance_id)
+        if not battle_state:
+            await ctx.send("Error: Could not retrieve battle state.", ephemeral=True)
+            return
+
+        # Calculate player's agility check (d20 + agility modifier)
+        player_agility = player_stats.get('total_agility', player_stats.get('agility', 0))
+        player_agility_mod = (player_agility - 10) // 2  # D&D-style ability modifier
+        player_roll = self.roll_dice() + max(player_agility_mod, 0)  # Minimum of +0 modifier
+        
+        await ctx.send(f"You attempt to flee! (Agility Check: {player_roll})", ephemeral=True)
+
+        # Track which enemies beat the player's roll
+        successful_enemies = []
+        
+        # Each enemy makes an opposed agility check
+        for battle_enemy in battle_state['enemies']:
+            if battle_enemy['current_health'] <= 0:
+                continue
+
+            enemy = await self.db.fetchrow("""
+                SELECT * FROM enemies WHERE enemyid = $1
+            """, battle_enemy['enemy_id'])
+            
+            if not enemy:
+                continue
+
+            enemy_agility_mod = (enemy['agility'] - 10) // 2
+            enemy_roll = self.roll_dice() + max(enemy_agility_mod, 0)
+            
+            await ctx.send(f"{enemy['name']} tries to stop you! (Agility Check: {enemy_roll})", ephemeral=True)
+            
+            if enemy_roll >= player_roll:  # Enemy succeeds if they match or beat player's roll
+                successful_enemies.append(enemy)
+
+        # If no enemies beat the player's roll, escape is successful
+        if not successful_enemies:
+            await ctx.send("You successfully escaped from battle!", ephemeral=True)
+            await self.end_battle_instance(instance_id)
+            del self.active_battles[player_id]
+            return
+        else:
+            await ctx.send(f"Failed to escape! {len(successful_enemies)} enemies caught up to you!", ephemeral=True)
+            
+            # Only enemies that beat the roll get to attack
+            player_survived = True
+            for enemy in successful_enemies:
+                if not player_survived:
+                    break
+                    
+                player_survived = await self.enemy_attack(ctx, player_id, enemy)
+                
+            if player_survived:
+                # Refresh battle status after enemy attacks
+                battle_state = await self.get_instance_state(instance_id)
+                await self.refresh_battle_status(ctx, battle_state, player_id)
+
+            # Check combat end
+            await self.handle_combat_end(ctx, player_id, successful_enemies[0])  # Use first enemy for end check
 
 # Setup function to load this as an extension
 def setup(bot):
