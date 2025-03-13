@@ -77,6 +77,44 @@ class playerinterface(Extension):
     async def get_location_based_buttons(self, location_id, player_id):
         db = self.bot.db
         logging.info(f"Fetching location-based buttons for location_id: {location_id}, player_id: {player_id}")
+        
+        # First get the player's party status
+        party_info = await db.fetchrow("""
+            SELECT p.*, pm.role 
+            FROM parties p
+            JOIN party_members pm ON p.party_id = pm.party_id
+            WHERE pm.player_id = $1 AND p.is_active = true
+        """, player_id)
+
+        # Create party management buttons
+        party_buttons = []
+        if not party_info:
+            # Not in a party - show create button
+            party_buttons.append(Button(
+                style=ButtonStyle.SUCCESS,
+                label="Create Party",
+                custom_id=f"party_create_{player_id}"
+            ))
+        else:
+            # In a party - show party management buttons
+            if party_info['leader_id'] == player_id:
+                # Leader buttons
+                party_buttons.extend([
+                    Button(style=ButtonStyle.PRIMARY, label="Party Info", custom_id=f"party_info_{player_id}"),
+                    Button(style=ButtonStyle.SUCCESS, label="Invite Player", custom_id=f"party_invite_{player_id}"),
+                    Button(style=ButtonStyle.DANGER, label="Kick Member", custom_id=f"party_kick_{player_id}"),
+                    Button(style=ButtonStyle.SECONDARY, label="Transfer Leader", custom_id=f"party_transfer_{player_id}"),
+                    Button(style=ButtonStyle.DANGER, label="Disband Party", custom_id=f"party_disband_{player_id}")
+                ])
+            else:
+                # Member buttons
+                party_buttons.extend([
+                    Button(style=ButtonStyle.PRIMARY, label="Party Info", custom_id=f"party_info_{player_id}"),
+                    Button(style=ButtonStyle.DANGER, label="Leave Party", custom_id=f"party_leave_{player_id}"),
+                    Button(style=ButtonStyle.SECONDARY, label="Ready Status", custom_id=f"party_ready_{player_id}")
+                ])
+
+        # Get location-based commands
         commands = await db.fetch("""
             SELECT command_name, button_label, custom_id, button_color, condition, required_quest_id, required_quest_status, required_item_id
             FROM location_commands
@@ -85,13 +123,15 @@ class playerinterface(Extension):
 
         buttons = []
         logging.info(f"Fetched {len(commands)} commands for location_id {location_id}")
+        
+        # Add party buttons first
+        buttons.extend(party_buttons)
+        
+        # Process location commands
         for command in commands:
             logging.info(f"Processing command: {command}")
-
-            # Provide a default value for button_color if it's None or NULL
             button_color = command.get('button_color') or 'PRIMARY'
             
-
             # Check if the command has quest requirements and evaluate them
             if command['required_quest_id'] is not None:
                 quest_status = await db.fetchval("""
@@ -113,14 +153,13 @@ class playerinterface(Extension):
                     continue
 
             # Determine button style based on button_color field
-            button_style = ButtonStyle.PRIMARY  # Default style
+            button_style = ButtonStyle.PRIMARY
             if button_color == 'SUCCESS':
                 button_style = ButtonStyle.SUCCESS
             elif button_color == 'DANGER':
                 button_style = ButtonStyle.DANGER
             elif button_color == 'SECONDARY':
                 button_style = ButtonStyle.SECONDARY
-            
 
             # Adjust custom_id generation for dynamic NPC buttons to be consistent with what DynamicNPCModule expects
             if "talk_to_" in command['command_name']:
@@ -134,10 +173,6 @@ class playerinterface(Extension):
                     custom_id = command['custom_id']
             else:
                 custom_id = command['custom_id']
-
-
-
-
 
             logging.info(f"Final custom_id for button: {custom_id}")
 
@@ -510,10 +545,66 @@ class playerinterface(Extension):
             await ctx.send("Quest not found.", ephemeral=True)
             
     
-        
+    @component_callback(re.compile(r"^party_create_\d+$"))
+    async def party_create_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[2])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
 
-    
-    
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        await self.bot.party_system.create_party(ctx, player_id)
+
+    @component_callback(re.compile(r"^party_info_\d+$"))
+    async def party_info_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[2])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        await self.bot.party_system.show_party_info(ctx, player_id)
+
+    @component_callback(re.compile(r"^party_invite_\d+$"))
+    async def party_invite_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[2])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        await self.bot.party_system.show_invite_menu(ctx, player_id)
+
+    @component_callback(re.compile(r"^party_leave_\d+$"))
+    async def party_leave_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[2])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        await self.bot.party_system.leave_party(ctx, player_id)
+
+    @component_callback(re.compile(r"^party_ready_\d+$"))
+    async def party_ready_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[2])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        await self.bot.party_system.toggle_ready_status(ctx, player_id)
+
+    @component_callback(re.compile(r"^party_disband_\d+$"))
+    async def party_disband_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[2])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        await self.bot.party_system.disband_party(ctx, player_id)
+
 
 # Setup function to load this as an extension
 def setup(bot):

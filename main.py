@@ -24,6 +24,7 @@ from DynamicNPCModule import setup as setup_dynamic_npc
 from Cooking import setup as cooking_setup
 from Cauldron import setup as cauldron_setup
 from Rest import setup as rest_setup
+from Party_System import setup as party_system_setup, PartySystem
 
 
 
@@ -66,6 +67,9 @@ bot.inventory_system = inventory_system
 travel_system = TravelSystem(bot)
 bot.travel_system = travel_system
 
+# Initialize and attach PartySystem
+party_system_setup(bot)  # Use the setup function instead of direct instantiation
+
 #woodcutting_setup(bot)
 bot.woodcutting_module = WoodcuttingModule(bot)
 #inventory_setup(bot)
@@ -79,7 +83,6 @@ bot.shop_manager = shop_manager
 mining_setup(bot)
 
 battle_system_setup(bot)
-
 
 cooking_setup(bot)
 
