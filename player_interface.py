@@ -545,6 +545,15 @@ class playerinterface(Extension):
                 )
             )
             
+            # All party members can invite
+            buttons.append(
+                Button(
+                    style=ButtonStyle.SUCCESS,
+                    label="Invite Player",
+                    custom_id=f"party_invite_{player_id}"
+                )
+            )
+            
             if party_info['leader_id'] == player_id:
                 # Player is the party leader
                 buttons.append(

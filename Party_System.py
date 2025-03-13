@@ -91,6 +91,12 @@ class PartySystem(Extension):
             custom_id=f"party_info_{player_id}"
         )
         
+        invite_button = Button(
+            style=ButtonStyle.SUCCESS,
+            label="Invite Player",
+            custom_id=f"party_invite_{player_id}"
+        )
+        
         disband_button = Button(
             style=ButtonStyle.DANGER,
             label="Disband Party",
@@ -100,19 +106,20 @@ class PartySystem(Extension):
         # Send updated menu
         await ctx.send(
             "Party Management:",
-            components=[[party_info_button, disband_button]],
+            components=[[party_info_button, invite_button, disband_button]],
             ephemeral=True
         )
 
     async def show_invite_menu(self, ctx: SlashContext, player_id: int):
-        # Check if player is party leader
+        # Check if player is in a party
         party = await self.db.fetchrow("""
             SELECT p.* FROM parties p
-            WHERE p.leader_id = $1 AND p.is_active = true
+            JOIN party_members pm ON p.party_id = pm.party_id
+            WHERE pm.player_id = $1 AND p.is_active = true
         """, player_id)
 
         if not party:
-            await ctx.send("You must be a party leader to invite players!", ephemeral=True)
+            await ctx.send("You must be in a party to invite players!", ephemeral=True)
             return
 
         # Get current party size
@@ -125,8 +132,29 @@ class PartySystem(Extension):
             await ctx.send("Party is already full!", ephemeral=True)
             return
 
-        # Show user selection menu (implementation depends on your UI needs)
-        await ctx.send("Use `/party invite @player` to invite a specific player.", ephemeral=True)
+        # Create an embed with instructions
+        embed = Embed(
+            title="Invite Players to Party",
+            description="To invite a player, use the command below and mention them:",
+            color=0x00FF00
+        )
+        embed.add_field(
+            name="Command Format",
+            value="`/party_invite @PlayerName`",
+            inline=False
+        )
+        embed.add_field(
+            name="Example",
+            value="Type: `/party_invite @John`\nThis will send an invite to John to join your party.",
+            inline=False
+        )
+        embed.add_field(
+            name="Current Party Size",
+            value=f"{member_count}/{party['max_size']} members",
+            inline=False
+        )
+
+        await ctx.send(embeds=[embed], ephemeral=True)
 
     async def show_join_menu(self, ctx: SlashContext, player_id: int):
         # Get pending invites for this player
@@ -535,6 +563,18 @@ class PartySystem(Extension):
             return
             
         await self.create_party(ctx, player_id)
+
+    @component_callback(re.compile(r"^party_invite_\d+$"))
+    async def handle_party_invite_button(self, ctx):
+        player_id = int(ctx.custom_id.split("_")[2])
+        
+        # Verify the user's identity
+        discord_id = await self.db.get_discord_id(player_id)
+        if ctx.author.id != discord_id:
+            await ctx.send("You are not authorized to invite players.", ephemeral=True)
+            return
+            
+        await self.show_invite_menu(ctx, player_id)
 
 def setup(bot):
     """Setup function to add the extension to the bot."""
