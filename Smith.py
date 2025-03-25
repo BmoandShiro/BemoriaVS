@@ -126,8 +126,10 @@ class SmithModule(Extension):
             logging.info(f"- Armor type: {armor_data['type']}")
             
             # Check if the type is valid
-            valid_types = ['Helmet', 'Chestplate', 'Gauntlets', 'Leggings', 'Boots', 
-                          'Headpiece', 'Chestpiece', 'Gloves']
+            valid_types = [
+                'Helmet', 'Chest', 'Hands', 'Legs', 'Feet',  # Base armor slots
+                'Back', 'Neck', 'Finger', 'Shield', 'Weapon'  # Additional equipment slots
+            ]
             if armor_data['type'] not in valid_types:
                 logging.info(f"- Skipping armor {armor_id}: invalid type '{armor_data['type']}'. Valid types are: {valid_types}")
                 continue
