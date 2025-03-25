@@ -25,6 +25,7 @@ from Cooking import setup as cooking_setup
 from Cauldron import setup as cauldron_setup
 from Rest import setup as rest_setup
 from Party_System import setup as party_system_setup, PartySystem
+from Forge import setup as forge_setup
 
 
 
@@ -88,6 +89,9 @@ cooking_setup(bot)
 cauldron_setup(bot)
 
 rest_setup(bot)
+
+# Initialize and attach ForgeModule
+forge_setup(bot)
 
 
 
