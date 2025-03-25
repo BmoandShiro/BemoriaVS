@@ -1,0 +1,37 @@
+# Game Development Issues and Improvements
+
+## Combat System
+- [ ] Add base armor/defense value to items table for armor pieces
+- [ ] Integrate armor/defense values into combat calculations
+- [ ] Implement damage reduction based on armor values
+- [ ] Add armor penetration mechanics for weapons
+
+## Smithing System
+- [ ] Add defense column to items table
+- [ ] Update armor pieces with appropriate defense values
+- [ ] Fix armor type validation in Smith module
+- [ ] Add crafting requirements display in armor tooltips
+
+## Database Improvements
+- [ ] Add defense column to items table
+- [ ] Standardize armor piece types
+- [ ] Add crafting requirements table for better recipe management
+- [ ] Add item categories for better organization
+
+## Future Features
+- [ ] Implement armor set bonuses
+- [ ] Add armor durability system
+- [ ] Create armor repair mechanics
+- [ ] Add special armor effects/abilities
+
+## Bug Fixes
+- [ ] Fix armor list dropdown in Smith module
+- [ ] Ensure proper type validation for armor pieces
+- [ ] Fix inventory display for armor pieces
+- [ ] Add proper error handling for missing item data
+
+## Documentation
+- [ ] Document armor types and their effects
+- [ ] Create crafting guide
+- [ ] Document combat mechanics
+- [ ] Add armor value reference table 

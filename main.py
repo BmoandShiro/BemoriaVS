@@ -26,6 +26,7 @@ from Cauldron import setup as cauldron_setup
 from Rest import setup as rest_setup
 from Party_System import setup as party_system_setup, PartySystem
 from Forge import setup as forge_setup
+from Smith import setup as smith_setup
 
 
 
@@ -92,6 +93,9 @@ rest_setup(bot)
 
 # Initialize and attach ForgeModule
 forge_setup(bot)
+
+# Initialize modules
+smith_setup(bot)
 
 
 
