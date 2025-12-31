@@ -6,6 +6,8 @@ from interactions import Extension, Embed, listen
 import logging
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+import os
+from dotenv import load_dotenv
 
 # Setup logging configuration
 logging.basicConfig(
@@ -16,14 +18,22 @@ logging.basicConfig(
     ]
 )
 
-# Configurations (adjust according to your setup)
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Configurations loaded from environment variables
 DATABASE_CONFIG = {
-    "dbname": "BMOSRPG",
-    "user": "postgres",
-    "password": "Oshirothegreat9!",
-    "host": "localhost",
-    "port": "5432"
+    "dbname": os.getenv('DB_NAME', 'BMOSRPG'),
+    "user": os.getenv('DB_USER', 'postgres'),
+    "password": os.getenv('DB_PASSWORD'),
+    "host": os.getenv('DB_HOST', 'localhost'),
+    "port": os.getenv('DB_PORT', '5432')
 }
+
+if not DATABASE_CONFIG["password"]:
+    raise ValueError("DB_PASSWORD environment variable is not set")
 
 class ListenerExtension(Extension):
     def __init__(self, bot):

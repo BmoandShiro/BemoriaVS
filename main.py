@@ -18,6 +18,7 @@ from Fishing import FishingModule
 from Shop_Manager import ShopManager
 from Woodcutting import WoodcuttingModule, setup as woodcutting_setup 
 import os
+from dotenv import load_dotenv
 from Mining import setup as mining_setup
 from Battle_System import setup as battle_system_setup
 from DynamicNPCModule import setup as setup_dynamic_npc
@@ -27,6 +28,7 @@ from Rest import setup as rest_setup
 from Party_System import setup as party_system_setup, PartySystem
 from Forge import setup as forge_setup
 from Smith import setup as smith_setup
+from general_store import setup as general_store_setup  # Update this import
 
 
 
@@ -34,7 +36,16 @@ from Smith import setup as smith_setup
 
 logging.basicConfig(level=logging.INFO)
 
-TOKEN = 'MTE3Nzc3MjcyNDE1MjY5Njg1Mg.GmEncj.q1k72hSszveLmlOLde-I1XVvVPAFLBlQAJdKXY'
+# Load environment variables from .env file
+load_dotenv()
+
+# Load Discord bot token from environment variable
+TOKEN = os.getenv('DISCORD_BOT_TOKEN')
+if not TOKEN:
+    raise ValueError(
+        "DISCORD_BOT_TOKEN environment variable is not set. "
+        "Please create a .env file with: DISCORD_BOT_TOKEN=your_token_here"
+    )
 
 # Since GUILD_IDS is now a list with one element, we extract the single ID for debug_scope
 debug_scope = GUILD_IDS[0]
@@ -42,7 +53,13 @@ debug_scope = GUILD_IDS[0]
 bot = Client(token=TOKEN, debug_scope=debug_scope)
 
 
-DATABASE_DSN = "postgresql://postgres:Oshirothegreat9!@localhost:5432/BMOSRPG"
+# Load database DSN from environment variable
+DATABASE_DSN = os.getenv('DATABASE_DSN')
+if not DATABASE_DSN:
+    raise ValueError(
+        "DATABASE_DSN environment variable is not set. "
+        "Please create a .env file with: DATABASE_DSN=postgresql://user:password@host:port/database"
+    )
 
 db = Database(dsn=DATABASE_DSN)
 bot.db = db  # Attach the database instance to the bot object
@@ -96,6 +113,9 @@ forge_setup(bot)
 
 # Initialize modules
 smith_setup(bot)
+
+# Setup the GeneralStore extension
+bot.load_extension("general_store")
 
 
 

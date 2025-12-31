@@ -262,8 +262,15 @@ class Database:
 
     # ... additional methods for other database interactions
 async def main():
-    # Replace with your actual DSN
-    db = Database(dsn="postgresql://postgres:Oshirothegreat9!@localhost:5432/BMOSRPG")
+    import os
+    from dotenv import load_dotenv
+    
+    load_dotenv()
+    dsn = os.getenv('DATABASE_DSN')
+    if not dsn:
+        raise ValueError("DATABASE_DSN environment variable is not set")
+    
+    db = Database(dsn=dsn)
     await db.connect()
     # Example usage
     races = await db.fetch_races()

@@ -6,14 +6,24 @@ from psycopg2 import OperationalError
 from PostgreSQLlogic import Database
 import logging
 from player_interface import playerinterface
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 
 class CharacterCreation(Extension):
     def __init__(self, bot):
         self.bot = bot
-        # Assume db is an instance of your Database class that's already connected
-        self.db = Database(dsn="postgresql://postgres:Oshirothegreat9!@localhost:5432/BMOSRPG")
+        # Use bot.db if available, otherwise create a new connection from env vars
+        if hasattr(bot, 'db') and bot.db:
+            self.db = bot.db
+        else:
+            dsn = os.getenv('DATABASE_DSN')
+            if not dsn:
+                raise ValueError("DATABASE_DSN environment variable is not set")
+            self.db = Database(dsn=dsn)
 
     @slash_command(name="create_character", description="Start creating a new character.")
     async def create_character(self, ctx):
