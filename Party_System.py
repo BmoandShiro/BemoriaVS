@@ -412,46 +412,99 @@ class PartySystem(Extension):
             await ctx.send("That player is already in a party!", ephemeral=True)
             return
 
-        # Create invite
-        await self.db.execute("""
-            INSERT INTO party_invites (party_id, inviter_id, invitee_id)
-            VALUES ($1, $2, $3)
+        # Check if there's already a pending invite
+        existing_invite = await self.db.fetchrow("""
+            SELECT invite_id FROM party_invites
+            WHERE party_id = $1 AND invitee_id = $2
+            AND status = 'pending' AND expires_at > NOW()
+        """, party['party_id'], invitee_id)
+
+        if existing_invite:
+            await ctx.send("This player already has a pending invite to your party!", ephemeral=True)
+            return
+
+        # Create invite with expiration (24 hours from now)
+        invite = await self.db.fetchrow("""
+            INSERT INTO party_invites (party_id, inviter_id, invitee_id, expires_at)
+            VALUES ($1, $2, $3, NOW() + interval '24 hours')
+            RETURNING invite_id
         """, party['party_id'], inviter_id, invitee_id)
 
-        # Create accept/decline buttons
+        if not invite:
+            await ctx.send("Error: Failed to create invite. Please try again.", ephemeral=True)
+            return
+
+        invite_id = invite['invite_id']
+
+        # Get party name for the embed
+        party_name = party.get('party_name', 'Party')
+
+        # Create accept/decline buttons using invite_id
         accept_button = Button(
             style=ButtonStyle.SUCCESS,
-            label="Accept",
-            custom_id=f"party_accept_{party['party_id']}"
+            label="Accept Invite",
+            custom_id=f"party_accept_{invite_id}"
         )
         decline_button = Button(
             style=ButtonStyle.DANGER,
-            label="Decline",
-            custom_id=f"party_decline_{party['party_id']}"
+            label="Decline Invite",
+            custom_id=f"party_decline_{invite_id}"
         )
 
-        # Send invite message to invitee
-        await ctx.send(f"Invited {player.mention} to join your party!", ephemeral=True)
-        await player.send(
-            f"{ctx.author.mention} has invited you to join their party!",
-            components=[[accept_button, decline_button]]
+        # Create embed for the invite
+        invite_embed = Embed(
+            title="🎉 Party Invitation!",
+            description=f"{ctx.author.mention} has invited you to join **{party_name}**!",
+            color=0x00FF00
         )
+        invite_embed.add_field(
+            name="Party Leader",
+            value=ctx.author.display_name,
+            inline=True
+        )
+        invite_embed.add_field(
+            name="Party Size",
+            value=f"{member_count}/{party['max_size']} members",
+            inline=True
+        )
+        invite_embed.set_footer(text="This invite expires in 24 hours")
+
+        # Send invite message to invitee via DM
+        try:
+            await player.send(
+                embeds=[invite_embed],
+                components=[[accept_button, decline_button]]
+            )
+            await ctx.send(f"✅ Successfully invited {player.mention} to join your party! They should receive a DM.", ephemeral=True)
+        except Exception as e:
+            # If DM fails (user has DMs disabled), send in channel instead
+            await ctx.send(
+                f"⚠️ Could not send DM to {player.mention}. They may have DMs disabled.\n"
+                f"**{player.mention}**, you have been invited to join **{party_name}**! "
+                f"Use `/party join` to see your pending invites.",
+                ephemeral=False
+            )
 
     @component_callback(re.compile(r"^party_accept_\d+$"))
     async def handle_party_accept(self, ctx):
-        party_id = int(ctx.custom_id.split("_")[2])
+        invite_id = int(ctx.custom_id.split("_")[2])
         player_id = await self.db.get_or_create_player(ctx.author.id)
 
-        # Check if invite is still valid
+        # Check if invite is still valid using invite_id
         invite = await self.db.fetchrow("""
-            SELECT * FROM party_invites
-            WHERE party_id = $1 AND invitee_id = $2
-            AND status = 'pending' AND expires_at > NOW()
-        """, party_id, player_id)
+            SELECT pi.*, p.party_name
+            FROM party_invites pi
+            JOIN parties p ON pi.party_id = p.party_id
+            WHERE pi.invite_id = $1 AND pi.invitee_id = $2
+            AND pi.status = 'pending' AND pi.expires_at > NOW()
+        """, invite_id, player_id)
 
         if not invite:
             await ctx.send("This invite has expired or is no longer valid.", ephemeral=True)
             return
+
+        party_id = invite['party_id']
+        party_name = invite['party_name']
 
         # Check if party is still active and has space
         party = await self.db.fetchrow("""
@@ -476,28 +529,54 @@ class PartySystem(Extension):
             VALUES ($1, $2)
         """, party_id, player_id)
 
-        # Update invite status
+        # Update invite status using invite_id
         await self.db.execute("""
             UPDATE party_invites
             SET status = 'accepted'
-            WHERE party_id = $1 AND invitee_id = $2
-        """, party_id, player_id)
+            WHERE invite_id = $1
+        """, invite_id)
 
-        await ctx.send("You have joined the party!", ephemeral=True)
+        # Notify party leader
+        inviter_discord_id = await self.db.fetchval("""
+            SELECT discord_id FROM players
+            WHERE playerid = $1
+        """, invite['inviter_id'])
+
+        if inviter_discord_id:
+            try:
+                inviter_user = await self.bot.fetch_user(inviter_discord_id)
+                if inviter_user:
+                    await inviter_user.send(f"🎉 {ctx.author.display_name} has accepted your party invite and joined **{party_name}**!")
+            except:
+                pass  # Silently fail if can't DM leader
+
+        await ctx.send(f"✅ You have joined **{party_name}**!", ephemeral=True)
 
     @component_callback(re.compile(r"^party_decline_\d+$"))
     async def handle_party_decline(self, ctx):
-        party_id = int(ctx.custom_id.split("_")[2])
+        invite_id = int(ctx.custom_id.split("_")[2])
         player_id = await self.db.get_or_create_player(ctx.author.id)
 
-        # Update invite status
+        # Get invite info before updating
+        invite = await self.db.fetchrow("""
+            SELECT pi.*, p.party_name
+            FROM party_invites pi
+            JOIN parties p ON pi.party_id = p.party_id
+            WHERE pi.invite_id = $1 AND pi.invitee_id = $2
+        """, invite_id, player_id)
+
+        if not invite:
+            await ctx.send("This invite is no longer valid.", ephemeral=True)
+            return
+
+        # Update invite status using invite_id
         await self.db.execute("""
             UPDATE party_invites
             SET status = 'declined'
-            WHERE party_id = $1 AND invitee_id = $2
-        """, party_id, player_id)
+            WHERE invite_id = $1
+        """, invite_id)
 
-        await ctx.send("You have declined the party invite.", ephemeral=True)
+        await ctx.send(f"You have declined the invite to **{invite['party_name']}**.", ephemeral=True)
 
     @component_callback(re.compile(r"^party_kick_\d+$"))
     async def handle_party_kick(self, ctx):
