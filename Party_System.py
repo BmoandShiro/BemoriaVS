@@ -276,9 +276,18 @@ class PartySystem(Extension):
         )
 
         for member in party_info:
-            # Get Discord member object to get their display name
-            discord_member = ctx.guild.get_member(int(member['discord_id']))
-            username = discord_member.display_name if discord_member else f"Player {member['player_id']}"
+            # Get Discord user to get their username
+            try:
+                discord_user = await self.bot.fetch_user(int(member['discord_id']))
+                # Try to get display name from guild if available, otherwise use username
+                if ctx.guild:
+                    guild_member = ctx.guild.get_member(int(member['discord_id']))
+                    username = guild_member.display_name if guild_member else discord_user.display_name or discord_user.username
+                else:
+                    username = discord_user.display_name or discord_user.username
+            except Exception:
+                # Fallback if user can't be fetched
+                username = f"Player {member['player_id']}"
             
             status = "✅" if member['ready_status'] else "❌"
             leader_star = "👑 " if member['player_id'] == member['leader_id'] else ""

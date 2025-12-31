@@ -477,10 +477,61 @@ class playerinterface(Extension):
 
         # Use self.bot.db to access the database
         player_id = await self.bot.db.get_or_create_player(ctx.author.id)
-        await self.bot.db.update_player_location(player_id, location_id)
-        new_location_name = await self.bot.db.fetchval("SELECT name FROM locations WHERE locationid = $1", location_id)
+        
+        # Check if player is in a party
+        party = await self.bot.db.fetchrow("""
+            SELECT p.*, pm.role
+            FROM parties p
+            JOIN party_members pm ON p.party_id = pm.party_id
+            WHERE pm.player_id = $1 AND p.is_active = true
+        """, player_id)
 
-        await ctx.send(f"You have traveled to {new_location_name}.", ephemeral=True)
+        if party:
+            # If player is party leader, move entire party
+            if party['leader_id'] == player_id:
+                new_location_name = await self.bot.db.fetchval("SELECT name FROM locations WHERE locationid = $1", location_id)
+                
+                # Get all party members
+                party_members = await self.bot.db.fetch("""
+                    SELECT pm.player_id, players.discord_id
+                    FROM party_members pm
+                    JOIN players ON pm.player_id = players.playerid
+                    WHERE pm.party_id = $1
+                """, party['party_id'])
+
+                # Update location for all party members
+                moved_count = 0
+                for member in party_members:
+                    await self.bot.db.update_player_location(member['player_id'], location_id)
+                    moved_count += 1
+                    
+                    # Notify each party member (except leader)
+                    if member['player_id'] != player_id:
+                        try:
+                            member_user = await self.bot.fetch_user(member['discord_id'])
+                            if member_user:
+                                await member_user.send(f"🎯 Your party leader has moved the party to **{new_location_name}**!")
+                        except:
+                            pass  # Silently fail if can't DM member
+
+                await ctx.send(
+                    f"✅ Party successfully traveled to **{new_location_name}**! "
+                    f"All {moved_count} party member(s) have been moved.",
+                    ephemeral=True
+                )
+            else:
+                # Non-leaders cannot travel solo
+                await ctx.send(
+                    "You are in a party! Only the party leader can initiate travel. "
+                    "Ask your party leader to move the party, or leave the party to travel solo.",
+                    ephemeral=True
+                )
+                return
+        else:
+            # Solo travel (no party)
+            await self.bot.db.update_player_location(player_id, location_id)
+            new_location_name = await self.bot.db.fetchval("SELECT name FROM locations WHERE locationid = $1", location_id)
+            await ctx.send(f"You have traveled to {new_location_name}.", ephemeral=True)
 
         # Fetch player details along with the gold balance in a single query
         player_data = await self.bot.db.fetchrow("""

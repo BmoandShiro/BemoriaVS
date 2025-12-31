@@ -25,6 +25,28 @@ class TravelSystem(Extension):
             await ctx.send("Could not find your player data. Please ensure your data is correct.", ephemeral=True)
             return
 
+        # Check if player is in a party
+        party = await self.bot.db.fetchrow("""
+            SELECT p.*, pm.role
+            FROM parties p
+            JOIN party_members pm ON p.party_id = pm.party_id
+            WHERE pm.player_id = $1 AND p.is_active = true
+        """, player_id)
+
+        if party:
+            # If player is party leader, move entire party
+            if party['leader_id'] == player_id:
+                await self.travel_party(ctx, player_id, destination, party['party_id'])
+            else:
+                # Non-leaders cannot travel solo
+                await ctx.send(
+                    "You are in a party! Only the party leader can initiate travel. "
+                    "Ask your party leader to move the party, or leave the party to travel solo.",
+                    ephemeral=True
+                )
+            return
+
+        # Solo travel (no party)
         current_location_id = await self.get_current_location_id(player_id)
         if current_location_id is None:
             await ctx.send("Could not find your current location. Please try again later.", ephemeral=True)
@@ -96,6 +118,58 @@ class TravelSystem(Extension):
         async with self.bot.db.pool.acquire() as conn:
             query = "UPDATE public.player_data SET current_location = $1 WHERE playerid = $2"
             await conn.execute(query, location_id, player_id)
+
+    async def travel_party(self, ctx: SlashContext, leader_id: int, destination: str, party_id: int):
+        """Move entire party to a destination."""
+        # Get leader's current location
+        current_location_id = await self.get_current_location_id(leader_id)
+        if current_location_id is None:
+            await ctx.send("Could not find your current location. Please try again later.", ephemeral=True)
+            return
+
+        # Get accessible locations (using leader's requirements)
+        accessible_locations = await self.get_connected_locations(current_location_id, leader_id)
+        destination_location = next((loc for loc in accessible_locations if loc['name'] == destination), None)
+
+        if not destination_location:
+            await ctx.send("The specified location is not accessible or you do not meet the conditions required to travel there.", ephemeral=True)
+            return
+
+        # Get all party members
+        party_members = await self.bot.db.fetch("""
+            SELECT pm.player_id, players.discord_id
+            FROM party_members pm
+            JOIN players ON pm.player_id = players.playerid
+            WHERE pm.party_id = $1
+        """, party_id)
+
+        if not party_members:
+            await ctx.send("Error: Could not find party members.", ephemeral=True)
+            return
+
+        # Update location for all party members
+        location_name = destination_location['name']
+        moved_count = 0
+        
+        for member in party_members:
+            await self.update_location(member['player_id'], destination_location['locationid'])
+            moved_count += 1
+            
+            # Notify each party member (except leader, who gets the main message)
+            if member['player_id'] != leader_id:
+                try:
+                    member_user = await self.bot.fetch_user(member['discord_id'])
+                    if member_user:
+                        await member_user.send(f"🎯 Your party leader has moved the party to **{location_name}**!")
+                except:
+                    pass  # Silently fail if can't DM member
+
+        # Send confirmation to leader
+        await ctx.send(
+            f"✅ Party successfully traveled to **{location_name}**! "
+            f"All {moved_count} party member(s) have been moved.",
+            ephemeral=True
+        )
 
     async def display_locations(self, ctx, current_location_id):
         player_id = await self.get_player_id(ctx.author.id)
