@@ -192,15 +192,28 @@ class InventorySystem(Extension):
     async def unequip_item_handler(self, ctx: ComponentContext):
         player_id = await self.db.get_or_create_player(ctx.author.id)
         items = await self.db.fetch("""
-            SELECT i.itemid, i.name FROM inventory inv
+            SELECT inv.inventoryid, i.itemid, i.name, inv.slot, inv.quantity
+            FROM inventory inv
             JOIN items i ON inv.itemid = i.itemid
             WHERE inv.playerid = $1 AND inv.isequipped = true
+            ORDER BY inv.slot, i.name
         """, player_id)
 
         if not items:
             return await ctx.send("No items currently equipped.", ephemeral=True)
 
-        options = [StringSelectOption(label=item['name'], value=str(item['itemid'])) for item in items]
+        # Use inventoryid as value to handle duplicate items in different slots
+        options = []
+        for item in items:
+            slot_name = item['slot'].replace('_', ' ').title() if item['slot'] else 'Unknown Slot'
+            label = f"{item['name']} ({slot_name})"
+            if item['quantity'] > 1:
+                label += f" x{item['quantity']}"
+            options.append(StringSelectOption(
+                label=label,
+                value=str(item['inventoryid'])  # Use inventoryid instead of itemid
+            ))
+        
         unequip_select = StringSelectMenu(custom_id="select_unequip_item", placeholder="Select an item to unequip")
         unequip_select.options = options
 
@@ -364,11 +377,55 @@ class InventorySystem(Extension):
 
     @component_callback("select_unequip_item")
     async def select_unequip_item_handler(self, ctx: ComponentContext):
-        item_id = int(ctx.values[0])
+        inventory_id = int(ctx.values[0])  # Now using inventoryid instead of itemid
         player_id = await self.db.get_or_create_player(ctx.author.id)
-        inventory = self.get_inventory_for_player(player_id)
-        result = await inventory.unequip_item(item_id)
-        await ctx.send(result, ephemeral=True)
+        
+        # Get item details for the message
+        item_data = await self.db.fetchrow("""
+            SELECT i.name, inv.slot, inv.quantity, inv.itemid
+            FROM inventory inv
+            JOIN items i ON inv.itemid = i.itemid
+            WHERE inv.inventoryid = $1 AND inv.playerid = $2
+        """, inventory_id, player_id)
+        
+        if not item_data:
+            await ctx.send("Item not found.", ephemeral=True)
+            return
+        
+        # Handle unequipping: merge with existing stack or unequip entry
+        # Due to unique constraint on unequipped items, we must merge if one exists
+        # Check for existing entry WITHIN the transaction to avoid race conditions
+        async with self.db.pool.acquire() as connection:
+            async with connection.transaction():
+                # Check if there's already an unequipped entry for this item (within transaction)
+                existing_unequipped = await connection.fetchrow("""
+                    SELECT inventoryid, quantity FROM inventory 
+                    WHERE playerid = $1 AND itemid = $2 AND isequipped = false 
+                    AND (in_bank = FALSE OR in_bank IS NULL)
+                    AND inventoryid != $3
+                """, player_id, item_data['itemid'], inventory_id)
+                
+                if existing_unequipped:
+                    # Merge with existing unequipped stack
+                    await connection.execute("""
+                        UPDATE inventory SET quantity = quantity + $1
+                        WHERE inventoryid = $2
+                    """, item_data['quantity'], existing_unequipped['inventoryid'])
+                    
+                    # Delete the equipped entry (to avoid constraint violation)
+                    await connection.execute("""
+                        DELETE FROM inventory WHERE inventoryid = $1
+                    """, inventory_id)
+                else:
+                    # No existing unequipped entry, just unequip this one
+                    # This is safe because there's no unequipped entry to conflict with
+                    await connection.execute("""
+                        UPDATE inventory SET isequipped = false, slot = NULL 
+                        WHERE inventoryid = $1 AND playerid = $2
+                    """, inventory_id, player_id)
+        
+        slot_name = item_data['slot'].replace('_', ' ').title() if item_data['slot'] else 'Unknown Slot'
+        await ctx.send(f"{item_data['name']} unequipped from {slot_name}.", ephemeral=True)
 
     @component_callback("view_equipped")
     async def view_equipped_handler(self, ctx: ComponentContext):

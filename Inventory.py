@@ -155,10 +155,37 @@ class Inventory:
         Equip an item to a specific slot.
         If slot is None, automatically determines the slot based on item type.
         Returns a special string "SELECT_SLOT" if the item needs slot selection (hatchets/axes).
+        Only equips ONE item from a stack, splitting the stack if necessary.
         """
         item_info = await self.db.fetchrow("SELECT * FROM items WHERE itemid = $1", item_id)
         if not item_info:
             return "Item not found."
+        
+        # Check if item is already equipped in the target slot (if slot is specified)
+        # For weapons, we allow equipping the same item in different slots (dual-wielding)
+        if slot:
+            slot_already_filled = await self.db.fetchval("""
+                SELECT COUNT(*) > 0 FROM inventory 
+                WHERE playerid = $1 AND itemid = $2 AND isequipped = true AND slot = $3
+            """, self.player_id, item_id, slot)
+            
+            if slot_already_filled:
+                return f"This item is already equipped in {slot.replace('_', ' ').title()}."
+        
+        # Find an unequipped inventory entry for this item
+        inventory_entry = await self.db.fetchrow("""
+            SELECT inventoryid, quantity FROM inventory 
+            WHERE playerid = $1 AND itemid = $2 AND isequipped = false 
+            AND (in_bank = FALSE OR in_bank IS NULL)
+            ORDER BY inventoryid
+            LIMIT 1
+        """, self.player_id, item_id)
+        
+        if not inventory_entry:
+            return "Item not found in inventory."
+        
+        inventory_id = inventory_entry['inventoryid']
+        quantity = inventory_entry['quantity']
         
          # If the item is a fishing rod, make sure no other rod is equipped
         if item_info['type'] == "Tool" and item_info['rodtype']:
@@ -179,13 +206,43 @@ class Inventory:
 
         # If slot is provided, use it directly (for hatchets/axes with user selection)
         if slot:
+            # Special validation for weapon slots
+            if slot in ["1H_weapon", "left_hand"]:
+                # Can't equip 1H weapons if 2H weapon is equipped
+                if await self.is_slot_filled("2H_weapon"):
+                    return "Cannot equip a 1-handed weapon while a 2-handed weapon is equipped."
+            elif slot == "2H_weapon":
+                # Can't equip 2H weapon if either hand is occupied
+                if await self.is_slot_filled("1H_weapon") or await self.is_slot_filled("left_hand"):
+                    return "Cannot equip a 2-handed weapon while 1-handed weapons are equipped in either hand."
+                # Can't equip 2H weapon if another 2H weapon is already equipped
+                if await self.is_slot_filled("2H_weapon"):
+                    return "You can only equip one 2-handed weapon at a time."
+            
             # Validate the slot is available
             if await self.is_slot_filled(slot):
                 return f"Slot {slot} is already occupied."
             
-            await self.db.execute("""
-                UPDATE inventory SET isequipped = true, slot = $1 WHERE playerid = $2 AND itemid = $3
-            """, slot, self.player_id, item_id)
+            # Handle stack splitting: if quantity > 1, split the stack
+            # Now that we allow multiple equipped entries, we can create a new equipped entry
+            if quantity > 1:
+                # Reduce the original stack by 1
+                await self.db.execute("""
+                    UPDATE inventory SET quantity = quantity - 1 
+                    WHERE inventoryid = $1
+                """, inventory_id)
+                
+                # Create a new equipped entry with quantity 1
+                await self.db.execute("""
+                    INSERT INTO inventory (playerid, itemid, quantity, isequipped, slot, in_bank)
+                    VALUES ($1, $2, 1, true, $3, false)
+                """, self.player_id, item_id, slot)
+            else:
+                # Quantity is 1, just equip this entry
+                await self.db.execute("""
+                    UPDATE inventory SET isequipped = true, slot = $1 
+                    WHERE inventoryid = $2
+                """, slot, inventory_id)
             
             slot_display = slot.replace('_', ' ').title()
             return f"{item_info['name']} equipped in {slot_display}."
@@ -211,9 +268,23 @@ class Inventory:
                 determined_slot = "finger2"
             else:
                 return "Both finger slots are occupied."
-        elif item_info['type'] == "1H_weapon" and not await self.is_slot_filled("2H_weapon"):
-            determined_slot = "1H_weapon"
-        elif item_info['type'] == "2H_weapon" and not await self.is_slot_filled("1H_weapon") and not await self.is_slot_filled("left_hand") and not await self.is_slot_filled("2H_weapon"):
+        elif item_info['type'] == "1H_weapon":
+            # 1H weapons can be equipped in either hand, but not if 2H weapon is equipped
+            if await self.is_slot_filled("2H_weapon"):
+                return "Cannot equip a 1-handed weapon while a 2-handed weapon is equipped."
+            # Try right hand first, then left hand
+            if not await self.is_slot_filled("1H_weapon"):
+                determined_slot = "1H_weapon"
+            elif not await self.is_slot_filled("left_hand"):
+                determined_slot = "left_hand"
+            else:
+                return "Both hands are occupied. Please unequip a weapon first."
+        elif item_info['type'] == "2H_weapon":
+            # 2H weapons require both hands to be free and no other 2H weapon equipped
+            if await self.is_slot_filled("2H_weapon"):
+                return "You can only equip one 2-handed weapon at a time."
+            if await self.is_slot_filled("1H_weapon") or await self.is_slot_filled("left_hand"):
+                return "Cannot equip a 2-handed weapon while 1-handed weapons are equipped in either hand."
             determined_slot = "2H_weapon"
         elif item_info['type'] == "Tool":
             determined_slot = await self.find_available_tool_belt_slot()
@@ -227,18 +298,41 @@ class Inventory:
                 # Pickaxes always go to tool belt
                 determined_slot = await self.find_available_tool_belt_slot()
             else:
-                # Other weapons go to weapon slots
-                if not await self.is_slot_filled("1H_weapon") and not await self.is_slot_filled("2H_weapon"):
-                    determined_slot = "1H_weapon"  # Default to 1H weapon slot
+                # Other weapons - treat as 1H weapons, can go in either hand
+                # But not if 2H weapon is equipped
+                if await self.is_slot_filled("2H_weapon"):
+                    return "Cannot equip a weapon while a 2-handed weapon is equipped."
+                # Try right hand first, then left hand
+                if not await self.is_slot_filled("1H_weapon"):
+                    determined_slot = "1H_weapon"
+                elif not await self.is_slot_filled("left_hand"):
+                    determined_slot = "left_hand"
                 else:
-                    return "Both weapon slots are occupied."
+                    return "Both hands are occupied. Please unequip a weapon first."
 
         if not determined_slot:
             return f"No available slot for {item_info['name']}."
 
-        await self.db.execute("""
-            UPDATE inventory SET isequipped = true, slot = $1 WHERE playerid = $2 AND itemid = $3
-        """, determined_slot, self.player_id, item_id)
+        # Handle stack splitting: if quantity > 1, split the stack
+        # Now that we allow multiple equipped entries, we can create a new equipped entry
+        if quantity > 1:
+            # Reduce the original stack by 1
+            await self.db.execute("""
+                UPDATE inventory SET quantity = quantity - 1 
+                WHERE inventoryid = $1
+            """, inventory_id)
+            
+            # Create a new equipped entry with quantity 1
+            await self.db.execute("""
+                INSERT INTO inventory (playerid, itemid, quantity, isequipped, slot, in_bank)
+                VALUES ($1, $2, 1, true, $3, false)
+            """, self.player_id, item_id, determined_slot)
+        else:
+            # Quantity is 1, just equip this entry
+            await self.db.execute("""
+                UPDATE inventory SET isequipped = true, slot = $1 
+                WHERE inventoryid = $2
+            """, determined_slot, inventory_id)
 
         slot_display = determined_slot.replace('_', ' ').title()
         return f"{item_info['name']} equipped in {slot_display}."
