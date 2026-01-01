@@ -656,6 +656,18 @@ class PartySystem(Extension):
             
         await self.show_invite_menu(ctx, player_id)
 
+    @component_callback(re.compile(r"^party_leave_\d+$"))
+    async def handle_party_leave_button(self, ctx):
+        player_id = int(ctx.custom_id.split("_")[2])
+        
+        # Verify the user's identity
+        discord_id = await self.db.get_discord_id(player_id)
+        if ctx.author.id != discord_id:
+            await ctx.send("You are not authorized to leave this party.", ephemeral=True)
+            return
+            
+        await self.leave_party(ctx, player_id)
+
 def setup(bot):
     """Setup function to add the extension to the bot."""
     return PartySystem(bot) 
