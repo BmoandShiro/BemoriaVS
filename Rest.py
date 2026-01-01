@@ -8,7 +8,7 @@ class RestModule(Extension):
         self.db = bot.db  # Use the shared Database instance
         logging.info("RestModule initialized and callback registered.")
 
-    @component_callback(re.compile(r"^rest_\d+$"))
+    @component_callback(re.compile(r"^rest"))
 
     async def rest_handler(self, ctx: ComponentContext):
         """
@@ -19,6 +19,28 @@ class RestModule(Extension):
 
             # Get player ID
             player_id = await self.db.get_or_create_player(ctx.author.id)
+            
+            # Fetch the current location of the player
+            player_location = await self.db.fetchval("""
+                SELECT current_location FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            # Verify that the player's current location has the rest command available
+            # Check by custom_id since that's what the button uses
+            has_rest_command = await self.db.fetchval("""
+                SELECT COUNT(*) FROM location_commands 
+                WHERE locationid = $1 AND custom_id = 'rest'
+            """, player_location)
+            
+            if not has_rest_command:
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location) or "your current location"
+                await ctx.send(
+                    f"You cannot rest at **{player_location_name}**! Rest is only available at specific locations.",
+                    ephemeral=True
+                )
+                return
 
             # Fetch and update player's stats
             max_stats = await self.db.fetchrow("""

@@ -105,7 +105,7 @@ class CauldronModule(Extension):
             ephemeral=True
         )
 
-    @component_callback(re.compile(r"^cauldron_view_\d+$"))
+    @component_callback(re.compile(r"^cauldron_view"))
     async def view_cauldron_handler(self, ctx: ComponentContext):
         """
         View the cauldron and its contents, including recipe selection.
@@ -117,11 +117,30 @@ class CauldronModule(Extension):
                 raise ValueError("Player ID not found for the current user.")
 
             # Fetch the current location of the player
-            location_id = await self.db.fetchval("""
+            player_location_id = await self.db.fetchval("""
                 SELECT current_location
                 FROM player_data
                 WHERE playerid = $1
             """, player_id)
+            
+            # Verify that the player's current location has the cauldron command available
+            # Check by custom_id since that's what the button uses
+            has_cauldron_command = await self.db.fetchval("""
+                SELECT COUNT(*) FROM location_commands 
+                WHERE locationid = $1 AND custom_id = 'cauldron_view'
+            """, player_location_id)
+            
+            if not has_cauldron_command:
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location_id) or "your current location"
+                await ctx.send(
+                    f"You cannot use the cauldron at **{player_location_name}**! The cauldron is only available at specific locations.",
+                    ephemeral=True
+                )
+                return
+            
+            location_id = player_location_id
 
             # Initialize cauldron_view
             cauldron_view = ""
@@ -209,9 +228,31 @@ class CauldronModule(Extension):
         Clear the cauldron content for the player at a specific location.
         """
         try:
-            # Extract the location ID from the custom ID
-            location_id = int(ctx.custom_id.split("_")[-1])
             player_id = await self.get_player_id(ctx.author.id)
+            
+            # Fetch the current location of the player
+            player_location = await self.db.fetchval("""
+                SELECT current_location FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            # Verify that the player's current location has the cauldron command available
+            # Check by custom_id since that's what the button uses
+            has_cauldron_command = await self.db.fetchval("""
+                SELECT COUNT(*) FROM location_commands 
+                WHERE locationid = $1 AND custom_id = 'cauldron_view'
+            """, player_location)
+            
+            if not has_cauldron_command:
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location) or "your current location"
+                await ctx.send(
+                    f"You cannot use the cauldron at **{player_location_name}**! The cauldron is only available at specific locations.",
+                    ephemeral=True
+                )
+                return
+            
+            location_id = player_location
 
             # Clear all items in the cauldron for the player at this location
             await self.db.execute("""
@@ -231,9 +272,31 @@ class CauldronModule(Extension):
         Add an ingredient to the cauldron at a specific location.
         """
         try:
-            # Extract the location ID from the custom ID
-            location_id = int(ctx.custom_id.split("_")[-1])
             player_id = await self.get_player_id(ctx.author.id)
+            
+            # Fetch the current location of the player
+            player_location = await self.db.fetchval("""
+                SELECT current_location FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            # Verify that the player's current location has the cauldron command available
+            # Check by custom_id since that's what the button uses
+            has_cauldron_command = await self.db.fetchval("""
+                SELECT COUNT(*) FROM location_commands 
+                WHERE locationid = $1 AND custom_id = 'cauldron_view'
+            """, player_location)
+            
+            if not has_cauldron_command:
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location) or "your current location"
+                await ctx.send(
+                    f"You cannot use the cauldron at **{player_location_name}**! The cauldron is only available at specific locations.",
+                    ephemeral=True
+                )
+                return
+            
+            location_id = player_location
 
             # Check if the player has selected a recipe
             selected_recipe = await self.db.fetchrow("""
@@ -357,6 +420,31 @@ class CauldronModule(Extension):
         """
         try:
             location_id, player_id = map(int, ctx.custom_id.split("_")[-2:])
+            
+            # Verify the player clicking is the correct player
+            actual_player_id = await self.get_player_id(ctx.author.id)
+            if actual_player_id != player_id:
+                await ctx.send("You are not authorized to use this button.", ephemeral=True)
+                return
+            
+            # Verify player is at the correct location
+            player_location = await self.db.fetchval("""
+                SELECT current_location FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            if player_location != location_id:
+                location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, location_id) or "Unknown Location"
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location) or "Unknown Location"
+                await ctx.send(
+                    f"You must be at **{location_name}** to use the cauldron! You are currently at **{player_location_name}**.",
+                    ephemeral=True
+                )
+                return
+            
             selected_inventory_id = int(ctx.values[0])
 
             # Fetch the recipe_id for the player's selected recipe
@@ -450,8 +538,48 @@ class CauldronModule(Extension):
         Allow the player to select a recipe for the cauldron.
         """
         try:
-            location_id = int(ctx.custom_id.split("_")[-1])
             player_id = await self.get_player_id(ctx.author.id)
+            
+            # Fetch the current location of the player
+            player_location = await self.db.fetchval("""
+                SELECT current_location FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            # Verify that the player's current location has the cauldron command available
+            has_cauldron_command = await self.db.fetchval("""
+                SELECT COUNT(*) FROM location_commands 
+                WHERE locationid = $1 AND custom_id = 'cauldron_view'
+            """, player_location)
+            
+            if not has_cauldron_command:
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location) or "your current location"
+                await ctx.send(
+                    f"You cannot use the cauldron at **{player_location_name}**! The cauldron is only available at specific locations.",
+                    ephemeral=True
+                )
+                return
+            
+            location_id = player_location
+            
+            # Verify player is at the correct location
+            player_location = await self.db.fetchval("""
+                SELECT current_location FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            if player_location != location_id:
+                location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, location_id) or "Unknown Location"
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location) or "Unknown Location"
+                await ctx.send(
+                    f"You must be at **{location_name}** to use the cauldron! You are currently at **{player_location_name}**.",
+                    ephemeral=True
+                )
+                return
 
             # Fetch all recipes
             recipes = await self.db.fetch("""
@@ -491,6 +619,31 @@ class CauldronModule(Extension):
         """
         try:
             location_id, player_id = map(int, ctx.custom_id.split("_")[-2:])
+            
+            # Verify the player clicking is the correct player
+            actual_player_id = await self.get_player_id(ctx.author.id)
+            if actual_player_id != player_id:
+                await ctx.send("You are not authorized to use this button.", ephemeral=True)
+                return
+            
+            # Verify player is at the correct location
+            player_location = await self.db.fetchval("""
+                SELECT current_location FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            if player_location != location_id:
+                location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, location_id) or "Unknown Location"
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location) or "Unknown Location"
+                await ctx.send(
+                    f"You must be at **{location_name}** to use the cauldron! You are currently at **{player_location_name}**.",
+                    ephemeral=True
+                )
+                return
+            
             recipe_id = int(ctx.values[0])
 
             # Check if the record already exists
@@ -530,8 +683,48 @@ class CauldronModule(Extension):
         Handle the 'Light Flame' button to complete the cooking process.
         """
         try:
-            location_id = int(ctx.custom_id.split("_")[-1])
             player_id = await self.get_player_id(ctx.author.id)
+            
+            # Fetch the current location of the player
+            player_location = await self.db.fetchval("""
+                SELECT current_location FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            # Verify that the player's current location has the cauldron command available
+            has_cauldron_command = await self.db.fetchval("""
+                SELECT COUNT(*) FROM location_commands 
+                WHERE locationid = $1 AND custom_id = 'cauldron_view'
+            """, player_location)
+            
+            if not has_cauldron_command:
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location) or "your current location"
+                await ctx.send(
+                    f"You cannot use the cauldron at **{player_location_name}**! The cauldron is only available at specific locations.",
+                    ephemeral=True
+                )
+                return
+            
+            location_id = player_location
+            
+            # Verify player is at the correct location
+            player_location = await self.db.fetchval("""
+                SELECT current_location FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            if player_location != location_id:
+                location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, location_id) or "Unknown Location"
+                player_location_name = await self.db.fetchval("""
+                    SELECT name FROM locations WHERE locationid = $1
+                """, player_location) or "Unknown Location"
+                await ctx.send(
+                    f"You must be at **{location_name}** to use the cauldron! You are currently at **{player_location_name}**.",
+                    ephemeral=True
+                )
+                return
 
             # Fetch the selected recipe_id
             recipe_id = await self.db.fetchval("""
