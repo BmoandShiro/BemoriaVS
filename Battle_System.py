@@ -2361,11 +2361,56 @@ class BattleSystem(Extension):
                     break
                     
                 player_survived = await self.enemy_attack(ctx, player_id, enemy, instance_id)
-                
-            if player_survived:
-                # Refresh battle status after enemy attacks
-                battle_state = await self.get_instance_state(instance_id)
-                await self.refresh_battle_status(ctx, battle_state, player_id)
+            
+            # Get battle state to check if it's a party battle
+            battle_state = await self.get_instance_state(instance_id)
+            if not battle_state:
+                return
+            
+            # Advance turn for party battles (since flee attempt uses up the turn)
+            if battle_state['instance_type'] == 'party':
+                next_player = await self.advance_turn(instance_id)
+                if next_player:
+                    # Get channel from battle instance
+                    channel_id = await self.db.fetchval("""
+                        SELECT channel_id FROM battle_instances WHERE instance_id = $1
+                    """, instance_id)
+                    channel = None
+                    if channel_id:
+                        try:
+                            channel = await self.bot.fetch_channel(channel_id)
+                        except:
+                            pass
+                    if channel:
+                        # Prompt next player
+                        await self.prompt_next_player_turn(instance_id, next_player, channel)
+            else:
+                # Solo battle - prompt player again after enemy attacks (if they survived)
+                if player_survived:
+                    # Check if battle is still active (enemy might be dead)
+                    battle_state = await self.get_instance_state(instance_id)
+                    if battle_state:
+                        # Get channel from battle instance
+                        channel_id = await self.db.fetchval("""
+                            SELECT channel_id FROM battle_instances WHERE instance_id = $1
+                        """, instance_id)
+                        channel = None
+                        if channel_id:
+                            try:
+                                channel = await self.bot.fetch_channel(channel_id)
+                            except:
+                                pass
+                        if channel:
+                            # Prompt player for next turn
+                            await self.prompt_next_player_turn(instance_id, player_id, channel)
+                        else:
+                            # Fallback to refresh battle status
+                            await self.refresh_battle_status(ctx, battle_state, player_id)
+                else:
+                    # Player died, refresh status to show death
+                    battle_state = await self.get_instance_state(instance_id)
+                    if battle_state:
+                        await self.refresh_battle_status(ctx, battle_state, player_id)
 
             # Check combat end
             await self.handle_combat_end(ctx, player_id, successful_enemies[0])  # Use first enemy for end check
