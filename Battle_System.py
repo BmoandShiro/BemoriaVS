@@ -10,11 +10,151 @@ class BattleSystem(Extension):
         self.bot = bot
         self.db = bot.db
 
+    def parse_dice(self, dice_string):
+        """
+        Parse dice notation like "1d6", "2d4+2", "1d8-1"
+        Returns: (num_dice, sides, modifier)
+        """
+        if not dice_string:
+            return (0, 0, 0)
+        
+        # Remove whitespace
+        dice_string = dice_string.strip()
+        
+        # Handle modifiers
+        modifier = 0
+        if '+' in dice_string:
+            parts = dice_string.split('+')
+            dice_string = parts[0]
+            modifier = int(parts[1])
+        elif '-' in dice_string:
+            parts = dice_string.split('-')
+            dice_string = parts[0]
+            modifier = -int(parts[1])
+        
+        # Parse dice part (e.g., "1d6")
+        if 'd' in dice_string:
+            num_dice, sides = map(int, dice_string.split('d'))
+        else:
+            # Just a number (e.g., "5" = 5 damage, no roll)
+            return (0, 0, int(dice_string))
+        
+        return (num_dice, sides, modifier)
+    
+    def roll_dice_notation(self, dice_string):
+        """
+        Roll dice based on notation.
+        Returns total rolled value (0-X for damage dice).
+        """
+        num_dice, sides, modifier = self.parse_dice(dice_string)
+        
+        if num_dice == 0 and sides == 0:
+            # Just a flat modifier
+            return modifier
+        
+        total = 0
+        for _ in range(num_dice):
+            total += self.roll_dice(sides, start=0)  # 0-X for damage
+        
+        return total + modifier
+    
+    def format_damage_message(self, damage_by_type, total_damage):
+        """
+        Format damage breakdown for display.
+        Returns string like "15 damage (8 slashing, 4 crushing, 3 piercing)"
+        """
+        if not damage_by_type or len(damage_by_type) == 1:
+            # Single damage type or old system
+            return f"{total_damage} damage"
+        
+        # Multiple damage types - show breakdown
+        damage_parts = []
+        for damage_type, amount in damage_by_type.items():
+            if amount > 0:
+                damage_parts.append(f"{amount} {damage_type}")
+        
+        if damage_parts:
+            return f"{total_damage} damage ({', '.join(damage_parts)})"
+        else:
+            return f"{total_damage} damage"
+    
+    def get_damage_type_multiplier(self, damage_type, attacker_stats):
+        """
+        Get multiplier for a specific damage type based on attacker stats.
+        Formula: 1.0 + (stat / 100) - scales per stat point
+        At 100 stat = 2.0x, at 50 stat = 1.5x, at -10 stat = 0.9x
+        """
+        if damage_type == 'piercing':
+            dex = attacker_stats.get('total_dexterity', attacker_stats.get('dexterity', 0))
+            return 1.0 + (dex / 100.0)
+        
+        elif damage_type == 'crushing':
+            str_stat = attacker_stats.get('total_strength', attacker_stats.get('strength', 0))
+            return 1.0 + (str_stat / 100.0)
+        
+        elif damage_type == 'slashing':
+            str_stat = attacker_stats.get('total_strength', attacker_stats.get('strength', 0))
+            dex = attacker_stats.get('total_dexterity', attacker_stats.get('dexterity', 0))
+            avg_stat = (str_stat + dex) / 2.0
+            return 1.0 + (avg_stat / 100.0)
+        
+        elif damage_type in ['fire', 'ice', 'lightning', 'water', 'earth', 'air', 'light', 'dark', 'magic', 'poison']:
+            # All magic/elemental damage types scale with Intelligence
+            int_stat = attacker_stats.get('total_intelligence', attacker_stats.get('intelligence', 0))
+            return 1.0 + (int_stat / 100.0)
+        
+        else:
+            return 1.0  # No multiplier for unknown types
+    
+    async def get_equipped_weapon_dice(self, player_id):
+        """
+        Get dice notation for all equipped weapons (excluding tools in tool belt).
+        Only counts weapons in combat slots (1H_weapon, 2H_weapon, left_hand), not tool belt slots.
+        Returns a dict of {damage_type: dice_string} for all damage types present.
+        """
+        weapons = await self.db.fetch("""
+            SELECT 
+                COALESCE(i.piercing_damage, '') as piercing_damage,
+                COALESCE(i.crushing_damage, '') as crushing_damage,
+                COALESCE(i.slashing_damage, '') as slashing_damage,
+                COALESCE(i.fire_damage, '') as fire_damage,
+                COALESCE(i.ice_damage, '') as ice_damage,
+                COALESCE(i.lightning_damage, '') as lightning_damage,
+                COALESCE(i.water_damage, '') as water_damage,
+                COALESCE(i.earth_damage, '') as earth_damage,
+                COALESCE(i.air_damage, '') as air_damage,
+                COALESCE(i.light_damage, '') as light_damage,
+                COALESCE(i.dark_damage, '') as dark_damage,
+                COALESCE(i.magic_damage, '') as magic_damage,
+                COALESCE(i.poison_damage, '') as poison_damage
+            FROM inventory inv
+            JOIN items i ON inv.itemid = i.itemid
+            WHERE inv.playerid = $1 
+            AND inv.isequipped = true
+            AND inv.slot IN ('1H_weapon', '2H_weapon', 'left_hand')
+            AND i.type = 'Weapon'
+        """, player_id)
+        
+        # Combine dice from all weapons (now stored in _damage columns)
+        combined_dice = {}
+        damage_types = ['piercing', 'crushing', 'slashing', 'fire', 'ice', 'lightning', 
+                       'water', 'earth', 'air', 'light', 'dark', 'magic', 'poison']
+        
+        for weapon in weapons:
+            for damage_type in damage_types:
+                dice = weapon.get(f'{damage_type}_damage', '')
+                if dice and dice.strip():
+                    # If multiple weapons have same type, we'll combine them
+                    # For now, just take the first one (can enhance later to combine)
+                    if damage_type not in combined_dice:
+                        combined_dice[damage_type] = dice
+        
+        return combined_dice
+    
     async def get_equipped_weapon_damage(self, player_id):
         """
-        Get total weapon damage from equipped weapons (excluding tools in tool belt).
-        Only counts weapons in combat slots (1H_weapon, 2H_weapon, left_hand), not tool belt slots.
-        Returns a dict with slashing, piercing, crushing, and dark damage.
+        DEPRECATED: Use get_equipped_weapon_dice and calculate_damage_with_dice instead.
+        Kept for backwards compatibility during migration.
         """
         weapons = await self.db.fetch("""
             SELECT 
@@ -46,9 +186,16 @@ class BattleSystem(Extension):
         return total_damage
 
     @staticmethod
-    def roll_dice(sides=20):
-        """Simulates a dice roll with given sides (default d20)."""
-        return random.randint(1, sides)
+    def roll_dice(sides=20, start=0):
+        """
+        Simulates a dice roll with given sides.
+        Default: d20 (1-20) for attack rolls
+        For damage: start=0 for 0-X rolls
+        """
+        if start == 0:
+            return random.randint(0, sides)  # 0-X inclusive
+        else:
+            return random.randint(start, sides)  # start-X inclusive
 
     @component_callback(re.compile(r"^hunt_\d+$"))
     async def hunt_button_handler(self, ctx: ComponentContext):
@@ -460,15 +607,64 @@ class BattleSystem(Extension):
         
         return hit_success, is_critical, is_blocked
 
+    async def calculate_damage_with_dice(self, attacker_stats: dict, defender_stats: dict,
+                                        weapon_dice: dict, is_critical: bool) -> dict:
+        """
+        Calculate damage with dice rolls and stat multipliers (new hybrid system).
+        
+        Args:
+            weapon_dice: Dict of {damage_type: dice_string}
+            Example: {'piercing': '1d1', 'crushing': '1d5', 'slashing': '1d6'}
+        
+        Returns:
+            Dict of {damage_type: final_damage} - damage after all modifiers including resistances
+        """
+        damage_by_type = {}
+        
+        # Step 1: Roll dice for each damage type
+        for damage_type, dice_string in weapon_dice.items():
+            if not dice_string or not dice_string.strip():
+                continue
+            
+            # Roll the dice (0-X for damage)
+            base_roll = self.roll_dice_notation(dice_string)
+            
+            # Step 2: Apply stat multiplier
+            multiplier = self.get_damage_type_multiplier(damage_type, attacker_stats)
+            damage = base_roll * multiplier
+            
+            # Step 3: Apply critical hit multiplier (if critical)
+            if is_critical:
+                attacker_luck = attacker_stats.get('total_luck', attacker_stats.get('luck', 0))
+                critical_multiplier = 1.5 + (attacker_luck * 0.01)
+                damage *= critical_multiplier
+            
+            # Step 4: Apply resistance
+            resistance_key = f"{damage_type}_resistance"
+            total_resistance_key = f"total_{resistance_key}"
+            resistance = defender_stats.get(total_resistance_key, defender_stats.get(resistance_key, 0))
+            resistance_modifier = 1 - (resistance / 100)
+            damage *= resistance_modifier
+            
+            # Step 5: Apply status effects
+            if 'playerid' in attacker_stats:
+                status_effects = await self.get_active_effects(attacker_stats['playerid'])
+                for effect in status_effects:
+                    if effect['attribute'].startswith('damage_bonus_'):
+                        damage *= (1 + effect['modifier_value'] / 100)
+                    elif effect['attribute'].startswith('damage_reduction_'):
+                        damage *= (1 - effect['modifier_value'] / 100)
+            
+            # Store damage by type (round down, minimum 0)
+            damage_by_type[damage_type] = max(0, int(damage)) if resistance < 100 else 0
+        
+        return damage_by_type
+    
     async def calculate_damage(self, attacker_stats: dict, defender_stats: dict, 
                              damage_type: str, base_damage: int, is_critical: bool) -> int:
         """
-        Calculate final damage after all modifiers.
-        Parameters:
-        - base_damage: The ability's base damage value
-        - damage_type: The type of damage (fire, ice, etc.)
-        - defender_stats: Contains the enemy's resistance values
-        Returns: Final calculated damage
+        DEPRECATED: Legacy damage calculation. Use calculate_damage_with_dice for new system.
+        Kept for backwards compatibility during migration.
         """
         # Get resistance for damage type (handle both player and enemy stats)
         resistance_key = f"{damage_type}_resistance"
@@ -721,19 +917,31 @@ class BattleSystem(Extension):
                 await self.send_battle_message(instance_id, message)
             await ctx.send(f"You missed your attack on {target_enemy['name']}!", ephemeral=True)
         else:
-            # Calculate damage - include weapon damage (excluding tools)
-            weapon_damage = await self.get_equipped_weapon_damage(player_id)
-            total_weapon_damage = (
-                weapon_damage['slashing'] + 
-                weapon_damage['piercing'] + 
-                weapon_damage['crushing'] + 
-                weapon_damage['dark']
-            )
-            base_damage = player_stats['total_strength'] + total_weapon_damage
-            damage_dealt = await self.calculate_damage(
-                player_stats, target_enemy,
-                'physical', base_damage, is_critical
-            )
+            # Calculate damage using new dice system
+            weapon_dice = await self.get_equipped_weapon_dice(player_id)
+            
+            # If weapon has dice, use new system; otherwise fall back to old system
+            if weapon_dice:
+                damage_by_type = await self.calculate_damage_with_dice(
+                    player_stats, target_enemy, weapon_dice, is_critical
+                )
+                # Sum all damage types
+                damage_dealt = sum(damage_by_type.values())
+            else:
+                # Fallback to old system for weapons without dice
+                weapon_damage = await self.get_equipped_weapon_damage(player_id)
+                total_weapon_damage = (
+                    weapon_damage['slashing'] + 
+                    weapon_damage['piercing'] + 
+                    weapon_damage['crushing'] + 
+                    weapon_damage['dark']
+                )
+                base_damage = player_stats['total_strength'] + total_weapon_damage
+                damage_dealt = await self.calculate_damage(
+                    player_stats, target_enemy,
+                    'physical', base_damage, is_critical
+                )
+                damage_by_type = {'physical': damage_dealt}
 
             # Update enemy's health in the battle instance
             new_health = target_battle_enemy['current_health'] - damage_dealt
@@ -742,15 +950,18 @@ class BattleSystem(Extension):
                 instance_id, 'enemy', target_battle_enemy['battle_enemy_id'], new_health
             )
 
+            # Format damage message with breakdown
+            damage_breakdown = self.format_damage_message(damage_by_type, damage_dealt)
+            
             # Send combat message to channel for party visibility
-            message = f"⚔️ **{player_name}** dealt {damage_dealt} damage to {target_enemy['name']}"
+            message = f"⚔️ **{player_name}** dealt {damage_breakdown} to {target_enemy['name']}"
             if is_critical:
                 message += " 💥 **Critical Hit!**"
             message += f"\n{target_enemy['name']} health: {new_health}"
             
             if battle_state['instance_type'] == 'party':
                 await self.send_battle_message(instance_id, message)
-            await ctx.send(f"You dealt {damage_dealt} damage to {target_enemy['name']}" + 
+            await ctx.send(f"You dealt {damage_breakdown} to {target_enemy['name']}" + 
                           (" (Critical Hit!)" if is_critical else "") + 
                           f". Remaining enemy health: {new_health}", ephemeral=True)
 
@@ -905,10 +1116,12 @@ class BattleSystem(Extension):
             new_health = current_stats['health'] - damage_received
             new_health = max(0, new_health)  # Ensure health doesn't go below 0
             
-            # Update health in battle instance if party battle
-            if is_party and instance_id:
+            # Update health in battle instance (for both party and solo battles)
+            if instance_id:
                 await self.update_battle_health(instance_id, 'player', player_id, new_health)
-            else:
+            
+            # Also update player_data for solo battles
+            if not is_party:
                 await self.db.execute("""
                     UPDATE player_data
                     SET health = $1
@@ -924,19 +1137,12 @@ class BattleSystem(Extension):
             if is_party:
                 await self.send_battle_message(instance_id, message)
             
-            # Also send personal message
+            # Send personal message to the attacked player
             personal_message = f"{enemy['name']} dealt {damage_received} damage to you"
             if is_critical:
                 personal_message += " (Critical Hit!)"
             personal_message += f". Your health: {new_health}"
             await ctx.send(personal_message, ephemeral=True)
-
-            # Send combat message
-            message = f"{enemy['name']} dealt {damage_received} damage to you"
-            if is_critical:
-                message += " (Critical Hit!)"
-            message += f". Remaining health: {new_health}"
-            await ctx.send(message, ephemeral=True)
 
             # Return whether player survived
             return new_health > 0
@@ -1465,15 +1671,34 @@ class BattleSystem(Extension):
                     await self.send_battle_message(instance_id, message)
                 await ctx.send(f"Your {ability['name']} missed {target_enemy['name']}!", ephemeral=True)
             else:
-                # Calculate damage
-                base_damage = ability.get(f"{ability['ability_type']}_damage", ability.get('damage', 5))
-                if ability['ability_type'] in ['fire', 'ice', 'lightning', 'water', 'earth', 'air', 'light', 'dark', 'magic']:
-                    base_damage += player_stats['total_intelligence'] * 0.5
+                # Calculate damage using new dice system
+                ability_dice = {}
+                damage_types = ['fire', 'ice', 'lightning', 'water', 'earth', 'air', 'light', 'dark', 'magic', 'poison',
+                               'piercing', 'crushing', 'slashing']
+                
+                # Get dice for each damage type the ability has (stored in _damage columns)
+                for damage_type in damage_types:
+                    dice = ability.get(f'{damage_type}_damage', '')
+                    if dice and dice.strip():
+                        ability_dice[damage_type] = dice
+                
+                # If ability has dice, use new system; otherwise fall back to old system
+                if ability_dice:
+                    damage_by_type = await self.calculate_damage_with_dice(
+                        player_stats, target_enemy, ability_dice, is_critical
+                    )
+                    damage_dealt = sum(damage_by_type.values())
+                else:
+                    # Fallback to old system
+                    base_damage = ability.get(f"{ability['ability_type']}_damage", ability.get('damage', 5))
+                    if ability['ability_type'] in ['fire', 'ice', 'lightning', 'water', 'earth', 'air', 'light', 'dark', 'magic']:
+                        base_damage += player_stats['total_intelligence'] * 0.5
 
-                damage_dealt = await self.calculate_damage(
-                    player_stats, target_enemy,
-                    ability['ability_type'], base_damage, is_critical
-                )
+                    damage_dealt = await self.calculate_damage(
+                        player_stats, target_enemy,
+                        ability['ability_type'], base_damage, is_critical
+                    )
+                    damage_by_type = {ability['ability_type']: damage_dealt}
 
                 # Update enemy health
                 new_health = target_battle_enemy['current_health'] - damage_dealt
@@ -1487,8 +1712,11 @@ class BattleSystem(Extension):
                     instance_id, 'player', player_id, participant['current_health'], new_mana
                 )
 
+                # Format damage message with breakdown
+                damage_breakdown = self.format_damage_message(damage_by_type, damage_dealt)
+                
                 # Send combat message to channel for party visibility
-                message = f"✨ **{player_name}** used **{ability['name']}** and dealt {damage_dealt} damage to {target_enemy['name']}"
+                message = f"✨ **{player_name}** used **{ability['name']}** and dealt {damage_breakdown} to {target_enemy['name']}"
                 if is_critical:
                     message += " 💥 **Critical Hit!**"
                 message += f"\n{target_enemy['name']} health: {new_health} | {player_name}'s mana: {new_mana}"
@@ -1497,7 +1725,7 @@ class BattleSystem(Extension):
                     await self.send_battle_message(instance_id, message)
                 
                 # Also send personal message
-                personal_message = f"You used {ability['name']} and dealt {damage_dealt} damage"
+                personal_message = f"You used {ability['name']} and dealt {damage_breakdown}"
                 if is_critical:
                     personal_message += " (Critical Hit!)"
                 personal_message += f". Remaining enemy health: {new_health}\nMana remaining: {new_mana}"
@@ -1903,10 +2131,25 @@ class BattleSystem(Extension):
                 logging.error(f"No living enemies found in battle {instance_id}")
                 return
             
-            participant = next((p for p in battle_state['participants'] if p['player_id'] == player_id), None)
+            # Get fresh participant data from database to ensure current health/mana
+            participant = await self.db.fetchrow("""
+                SELECT * FROM battle_participants 
+                WHERE instance_id = $1 AND player_id = $2
+            """, instance_id, player_id)
+            
             if not participant:
                 logging.error(f"Player {player_id} not found in battle participants")
                 return
+            
+            # Also refresh battle_state participants for display
+            battle_state['participants'] = await self.db.fetch("""
+                SELECT * FROM battle_participants WHERE instance_id = $1
+            """, instance_id)
+            
+            # Refresh enemies too
+            battle_state['enemies'] = await self.db.fetch("""
+                SELECT * FROM battle_enemies WHERE instance_id = $1
+            """, instance_id)
             
             # Get player's Discord ID and username
             discord_id = await self.db.fetchval("""

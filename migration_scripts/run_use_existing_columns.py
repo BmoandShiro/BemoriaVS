@@ -36,42 +36,24 @@ async def run_migration():
         )
     
     try:
-        # Read and execute first migration
-        with open('add_party_combat_turn_system.sql', 'r', encoding='utf-8') as f:
+        # Read and execute migration
+        with open('migrations/use_existing_damage_columns.sql', 'r', encoding='utf-8') as f:
             migration_sql = f.read()
         
-        print("Running migration: add_party_combat_turn_system.sql")
+        print("Converting damage columns to store dice notation...")
         print("-" * 50)
         
         # Execute the migration
         await conn.execute(migration_sql)
         
-        print("Migration 1 completed!")
-        
-        # Read and execute second migration
-        with open('add_battle_channel_columns.sql', 'r', encoding='utf-8') as f:
-            migration_sql2 = f.read()
-        
-        print("\nRunning migration: add_battle_channel_columns.sql")
-        print("-" * 50)
-        
-        # Execute the migration
-        await conn.execute(migration_sql2)
-        
-        print("Migration 2 completed!")
-        print("\nAll migrations completed successfully!")
-        print("\nAdded columns to battle_instances table:")
-        print("  - current_turn_player_id")
-        print("  - turn_order")
-        print("  - turn_number")
-        print("  - phase")
-        print("  - channel_id")
-        print("  - message_id")
-        print("\nCreated index:")
-        print("  - idx_battle_instances_current_turn")
+        print("[SUCCESS] Migration completed!")
+        print("  - Converted damage columns from INTEGER to VARCHAR")
+        print("  - Existing values converted to dice notation (e.g., 6 -> '1d6')")
+        print("  - Dropped temporary _dice columns")
+        print("  - Code now uses existing _damage columns for dice notation")
         
     except Exception as e:
-        print(f"Error running migration: {e}")
+        print(f"[ERROR] Error running migration: {e}")
         import traceback
         traceback.print_exc()
     finally:
