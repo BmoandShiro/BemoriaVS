@@ -1,4 +1,4 @@
-from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, component_callback, Embed, StringSelectOption, StringSelectMenu
+from interactions import SlashContext, Extension, Button, ButtonStyle, ComponentContext, component_callback, Embed, StringSelectOption, StringSelectMenu, ActionRow
 import random
 import asyncio
 import re
@@ -24,10 +24,20 @@ class BattleSystem(Extension):
             await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
             return
 
-        await ctx.defer(ephemeral=True)  # Acknowledge the interaction to prevent expiration
+        # For party battles, we need to send to channel, so don't defer ephemerally
+        # Check if player is in a party first
+        player_id = await self.db.get_or_create_player(ctx.author.id)
+        party = await self.db.fetchrow("""
+            SELECT p.* FROM parties p
+            JOIN party_members pm ON p.party_id = pm.party_id
+            WHERE pm.player_id = $1 AND p.is_active = true
+        """, player_id)
+        
+        # Defer - ephemeral for solo, not ephemeral for party (so channel message works)
+        is_party = party is not None
+        await ctx.defer(ephemeral=not is_party)
 
         # Get player data and proceed with hunting logic
-        player_id = await self.db.get_or_create_player(ctx.author.id)
         player_data = await self.db.fetchrow("""
             SELECT current_location
             FROM player_data
@@ -47,8 +57,8 @@ class BattleSystem(Extension):
     async def prompt_player_action(self, ctx: SlashContext, player_id, player_health, enemy, enemy_health, player_attributes, enemy_attributes, player_resistances, enemy_resistances):
         # Send a message to prompt the player for an action (attack or use ability)
         embed = Embed(
-            title=f"Battle with {enemy['name']}",
-            description=f"Your health: {player_health}\n{enemy['name']}'s health: {enemy_health}",
+            title=f"⚔️ Battle with {enemy['name']}",
+            description=f"**Your Turn!**\nYour health: {player_health}\n{enemy['name']}'s health: {enemy_health}",
             color=0xFF0000  # Red color for battle
         )
 
@@ -67,13 +77,26 @@ class BattleSystem(Extension):
             Button(
                 style=ButtonStyle.DANGER,
                 label="Flee Battle",
-                custom_id=f"flee_{player_id}_{enemy['enemyid']}"
+                custom_id=f"flee_{player_id}"
             )
         ]
 
-        await ctx.send(embeds=[embed], components=[buttons], ephemeral=True)
+        if ctx:
+            await ctx.send(embeds=[embed], components=[buttons], ephemeral=True)
+        else:
+            # No context - send as DM
+            try:
+                discord_id = await self.db.fetchval("""
+                    SELECT discord_id FROM players WHERE playerid = $1
+                """, player_id)
+                if discord_id:
+                    user = await self.bot.fetch_user(discord_id)
+                    if user:
+                        await user.send(embeds=[embed], components=[buttons])
+            except Exception as e:
+                logging.error(f"Error sending battle prompt: {e}")
 
-    async def start_hunt_battle(self, ctx: SlashContext, player_id: int, location_id: int):
+    async def start_hunt_battle(self, ctx, player_id: int, location_id: int):
         """Start a hunt battle, handling both solo and party cases."""
         # Check if player is in a party
         party = await self.db.fetchrow("""
@@ -140,62 +163,196 @@ class BattleSystem(Extension):
             await ctx.send("Error: Could not initialize battle.", ephemeral=True)
             return
 
+        # Initialize turn order for party battles
+        if not is_solo:
+            first_turn_player = await self.initialize_turn_order(instance_id)
+        else:
+            first_turn_player = player_id
+            await self.db.execute("""
+                UPDATE battle_instances
+                SET current_turn_player_id = $1, turn_order = ARRAY[$1]
+                WHERE instance_id = $2
+            """, player_id, instance_id)
+
         # Store instance ID in active_battles
         self.active_battles[player_id] = {
             'instance_id': instance_id,
             'enemy': enemies[0]  # Store first enemy for reference
         }
 
-        # Create battle status embed
-        embed = Embed(
-            title="Battle Started!",
-            description="A new battle has begun!",
-            color=0xFF0000
-        )
-
-        # Add player field
-        player_data = await self.db.fetchrow("""
-            SELECT 
-                pd.*,
-                psv.total_health,
-                psv.total_mana
-            FROM player_data pd
-            JOIN player_stats_view psv ON pd.playerid = psv.playerid
-            WHERE pd.playerid = $1
-        """, player_id)
-        
-        if player_data:
-            embed.add_field(
-                name="Player",
-                value=f"Health: {player_data['health']}\nMana: {player_data['mana']}",
-                inline=True
+        # Create battle announcement embed for channel
+        if not is_solo:
+            # Party battle
+            battle_embed = Embed(
+                title="⚔️ Battle Started!",
+                description="A new battle has begun!",
+                color=0xFF0000
             )
-
-        # Add enemy fields
-        for enemy in enemies:
-            embed.add_field(
-                name=enemy['name'],
-                value=f"Health: {enemy['health']}",
-                inline=True
+            
+            # Get usernames for display
+            participant_info = []
+            for p in battle_state['participants']:
+                try:
+                    discord_id = await self.db.fetchval("""
+                        SELECT discord_id FROM players WHERE playerid = $1
+                    """, p['player_id'])
+                    if discord_id:
+                        user = await self.bot.fetch_user(discord_id)
+                        username = user.display_name if user else f"Player {p['player_id']}"
+                    else:
+                        username = f"Player {p['player_id']}"
+                except:
+                    username = f"Player {p['player_id']}"
+                
+                p_data = await self.db.fetchrow("""
+                    SELECT health, mana FROM player_data WHERE playerid = $1
+                """, p['player_id'])
+                
+                if p_data:
+                    is_current_turn = " 👈 Your Turn" if p['player_id'] == first_turn_player else ""
+                    battle_embed.add_field(
+                        name=f"{username}{is_current_turn}",
+                        value=f"Health: {p_data['health']}\nMana: {p_data['mana']}",
+                        inline=True
+                    )
+                    participant_info.append({
+                        'player_id': p['player_id'],
+                        'username': username,
+                        'discord_id': discord_id if 'discord_id' in locals() else None
+                    })
+            
+            # Add enemy fields
+            for enemy in enemies:
+                battle_embed.add_field(
+                    name=enemy['name'],
+                    value=f"Health: {enemy['health']}",
+                    inline=True
+                )
+            
+            # Show turn order
+            if len(party_members) > 1:
+                turn_order_list = await self.db.fetchval("""
+                    SELECT turn_order FROM battle_instances WHERE instance_id = $1
+                """, instance_id)
+                if turn_order_list:
+                    # Get usernames for turn order
+                    turn_order_names = []
+                    for pid in turn_order_list:
+                        info = next((p for p in participant_info if p['player_id'] == pid), None)
+                        turn_order_names.append(info['username'] if info else f"Player {pid}")
+                    battle_embed.set_footer(text=f"Turn Order: {' → '.join(turn_order_names)}")
+            
+            # Get channel - ComponentContext might need different access
+            channel = None
+            channel_id = None
+            if hasattr(ctx, 'channel') and ctx.channel:
+                channel = ctx.channel
+                channel_id = ctx.channel.id
+            elif hasattr(ctx, 'guild') and ctx.guild:
+                # Try to get channel from message if available
+                if hasattr(ctx, 'message') and ctx.message and hasattr(ctx.message, 'channel'):
+                    channel = ctx.message.channel
+                    channel_id = ctx.message.channel.id
+            
+            # Send battle announcement to channel (not ephemeral so all can see)
+            if channel:
+                battle_message = await channel.send(embeds=[battle_embed])
+            else:
+                # Fallback - try ctx.send
+                battle_message = await ctx.send(embeds=[battle_embed])
+                channel_id = battle_message.channel.id if hasattr(battle_message, 'channel') else None
+            
+            # Store channel and message ID in battle instance for later interactions
+            await self.db.execute("""
+                UPDATE battle_instances
+                SET channel_id = $1, message_id = $2
+                WHERE instance_id = $3
+            """, channel_id, battle_message.id, instance_id)
+            
+            # Also send DMs to party members as backup notification
+            for member in party_members:
+                try:
+                    member_discord_id = await self.db.fetchval("""
+                        SELECT discord_id FROM players WHERE playerid = $1
+                    """, member['player_id'])
+                    
+                    if member_discord_id:
+                        member_user = await self.bot.fetch_user(member_discord_id)
+                        if member_user:
+                            channel_mention = f"<#{channel_id}>" if channel_id else "the channel"
+                            dm_embed = Embed(
+                                title="⚔️ Battle Started!",
+                                description=f"A battle has started in {channel_mention}!",
+                                color=0xFF0000
+                            )
+                            dm_embed.add_field(
+                                name="Location",
+                                value=f"Check {channel_mention} to take your turn!",
+                                inline=False
+                            )
+                            try:
+                                await member_user.send(embeds=[dm_embed])
+                            except:
+                                pass  # Silently fail if DMs disabled
+                except Exception as e:
+                    logging.error(f"Error sending DM to party member {member['player_id']}: {e}")
+            
+            # Get channel for turn prompts (outside the loop!)
+            channel_for_turns = channel if channel else (ctx.channel if hasattr(ctx, 'channel') and ctx.channel else None)
+            
+            # Prompt the first player whose turn it is (in the channel) - only once!
+            await self.prompt_next_player_turn(instance_id, first_turn_player, channel_for_turns)
+        else:
+            # Solo battle - simple notification
+            embed = Embed(
+                title="⚔️ Battle Started!",
+                description="A new battle has begun!",
+                color=0xFF0000
             )
-
-        # Send battle status and prompt for action
-        await ctx.send(embeds=[embed], ephemeral=True)
-        
-        # Prompt for player action
-        await self.prompt_player_action(
-            ctx,
-            player_id,
-            player_data['health'],
-            enemies[0],  # Use first enemy for now
-            enemies[0]['health'],
-            self.extract_attributes(await self.db.fetchrow("""
-                SELECT * FROM player_stats_view WHERE playerid = $1
-            """, player_id)),
-            self.extract_attributes(enemies[0]),
-            {},  # Resistances will be added later
-            {}
-        )
+            
+            player_data = await self.db.fetchrow("""
+                SELECT health, mana FROM player_data WHERE playerid = $1
+            """, player_id)
+            
+            if player_data:
+                embed.add_field(
+                    name="You",
+                    value=f"Health: {player_data['health']}\nMana: {player_data['mana']}",
+                    inline=True
+                )
+            
+            for enemy in enemies:
+                embed.add_field(
+                    name=enemy['name'],
+                    value=f"Health: {enemy['health']}",
+                    inline=True
+                )
+            
+            # Get channel for solo battles too
+            channel = None
+            channel_id = None
+            if hasattr(ctx, 'channel') and ctx.channel:
+                channel = ctx.channel
+                channel_id = ctx.channel.id
+            elif hasattr(ctx, 'guild') and ctx.guild:
+                if hasattr(ctx, 'message') and ctx.message and hasattr(ctx.message, 'channel'):
+                    channel = ctx.message.channel
+                    channel_id = ctx.message.channel.id
+            
+            if channel:
+                battle_message = await channel.send(embeds=[embed])
+            else:
+                battle_message = await ctx.send(embeds=[embed])
+                channel_id = battle_message.channel.id if hasattr(battle_message, 'channel') else None
+            
+            # Store channel and message ID
+            await self.db.execute("""
+                UPDATE battle_instances
+                SET channel_id = $1, message_id = $2
+                WHERE instance_id = $3
+            """, channel_id, battle_message.id, instance_id)
+            
+            await self.prompt_next_player_turn(instance_id, player_id, channel)
 
     @staticmethod
     def extract_resistances(entity):
@@ -311,11 +468,125 @@ class BattleSystem(Extension):
         # Ensure minimum damage of 1 unless complete immunity (100% or higher resistance)
         return 0 if resistance >= 100 else max(1, int(damage))
 
+    @component_callback(re.compile(r"^attack_select_\d+$"))
+    async def attack_select_handler(self, ctx: ComponentContext):
+        """Handle attack button click - show enemy selection if multiple enemies."""
+        # Extract player ID from the custom ID
+        _, _, player_id = ctx.custom_id.split("_")
+        player_id = int(player_id)
+        
+        # Verify player
+        player_data = await self.db.fetchrow("""
+            SELECT playerid FROM players WHERE discord_id = $1
+        """, ctx.author.id)
+        
+        if not player_data or player_data['playerid'] != player_id:
+            await ctx.send("You are not authorized to use this button.", ephemeral=True)
+            return
+        
+        await ctx.defer(ephemeral=True)
+        
+        # Get battle instance
+        instance_id = await self.get_player_battle_instance(player_id)
+        if not instance_id:
+            await ctx.send("No active battle found.", ephemeral=True)
+            return
+        
+        # Check if it's this player's turn
+        current_turn_player = await self.get_current_turn_player(instance_id)
+        if current_turn_player and current_turn_player != player_id:
+            await ctx.send("⏳ It's not your turn! Please wait for your turn.", ephemeral=True)
+            return
+        
+        # Get battle state
+        battle_state = await self.get_instance_state(instance_id)
+        if not battle_state:
+            await ctx.send("Error: Could not retrieve battle state.", ephemeral=True)
+            return
+        
+        # Get living enemies
+        living_enemies = []
+        for battle_enemy in battle_state['enemies']:
+            if battle_enemy['current_health'] > 0:
+                enemy_data = await self.db.fetchrow("""
+                    SELECT * FROM enemies WHERE enemyid = $1
+                """, battle_enemy['enemy_id'])
+                if enemy_data:
+                    living_enemies.append({
+                        'battle_enemy': battle_enemy,
+                        'enemy_data': enemy_data
+                    })
+        
+        if not living_enemies:
+            await ctx.send("No enemies to attack.", ephemeral=True)
+            return
+        
+        # If only one enemy, proceed directly
+        if len(living_enemies) == 1:
+            enemy_id = living_enemies[0]['enemy_data']['enemyid']
+            # Call the actual attack handler
+            await self.execute_attack(ctx, player_id, enemy_id, instance_id)
+            return
+        
+        # Multiple enemies - show selection
+        embed = Embed(
+            title="Select Target",
+            description="Choose which enemy to attack:",
+            color=0xFF0000
+        )
+        
+        enemy_buttons = []
+        for i, enemy_info in enumerate(living_enemies):
+            enemy = enemy_info['enemy_data']
+            battle_enemy = enemy_info['battle_enemy']
+            enemy_buttons.append(
+                Button(
+                    style=ButtonStyle.DANGER,
+                    label=f"{enemy['name']} (HP: {battle_enemy['current_health']})",
+                    custom_id=f"attack_{player_id}_{enemy['enemyid']}"
+                )
+            )
+        
+        # Group buttons into rows
+        button_rows = []
+        for i in range(0, len(enemy_buttons), 5):
+            button_rows.append(ActionRow(*enemy_buttons[i:i+5]))
+        
+        await ctx.send(embeds=[embed], components=button_rows, ephemeral=True)
+    
     @component_callback(re.compile(r"^attack_\d+_\d+$"))
     async def attack_button_handler(self, ctx: ComponentContext):
         # Extract player ID and enemy ID from the custom ID
         _, player_id, enemy_id = ctx.custom_id.split("_")
         player_id, enemy_id = int(player_id), int(enemy_id)
+        
+        await ctx.defer(ephemeral=True)
+        
+        # Get battle instance
+        instance_id = await self.get_player_battle_instance(player_id)
+        if not instance_id:
+            await ctx.send("No active battle found.", ephemeral=True)
+            return
+        
+        # Execute the attack
+        await self.execute_attack(ctx, player_id, enemy_id, instance_id)
+    
+    async def execute_attack(self, ctx: ComponentContext, player_id: int, enemy_id: int, instance_id: int):
+        """Execute an attack on a specific enemy."""
+        # Verify player
+        player_data = await self.db.fetchrow("""
+            SELECT playerid FROM players WHERE discord_id = $1
+        """, ctx.author.id)
+        
+        if not player_data or player_data['playerid'] != player_id:
+            await ctx.send("You are not authorized to use this button.", ephemeral=True)
+            return
+        
+        # Check if it's this player's turn (for party battles)
+        current_turn_player = await self.get_current_turn_player(instance_id)
+        if current_turn_player and current_turn_player != player_id:
+            await ctx.send("⏳ It's not your turn! Please wait for your turn.", ephemeral=True)
+            return
 
         # Fetch player stats from the view
         player_stats = await self.db.fetchrow("""
@@ -328,13 +599,50 @@ class BattleSystem(Extension):
 
         player_stats = dict(player_stats)
 
-        if player_id not in self.active_battles:
-            await ctx.send("No active battle found.", ephemeral=True)
+        # Get battle state
+        battle_state = await self.get_instance_state(instance_id)
+        if not battle_state:
+            await ctx.send("Error: Could not retrieve battle state.", ephemeral=True)
             return
 
-        # Get the current battle data
-        battle_data = self.active_battles[player_id]
-        instance_id = battle_data['instance_id']
+        # Find the target enemy in the battle
+        target_enemy = None
+        target_battle_enemy = None
+        for battle_enemy in battle_state['enemies']:
+            enemy = await self.db.fetchrow("""
+                SELECT * FROM enemies WHERE enemyid = $1
+            """, battle_enemy['enemy_id'])
+            if enemy and enemy['enemyid'] == enemy_id:
+                target_enemy = enemy
+                target_battle_enemy = battle_enemy
+                break
+
+        if not target_enemy:
+            await ctx.send("Target enemy not found in battle.", ephemeral=True)
+            return
+
+        # Get battle instance for this player
+        instance_id = await self.get_player_battle_instance(player_id)
+        if not instance_id:
+            await ctx.send("No active battle found.", ephemeral=True)
+            return
+        
+        # Check if it's this player's turn (for party battles)
+        current_turn_player = await self.get_current_turn_player(instance_id)
+        if current_turn_player and current_turn_player != player_id:
+            await ctx.send("⏳ It's not your turn! Please wait for your turn.", ephemeral=True)
+            return
+
+        # Fetch player stats from the view
+        player_stats = await self.db.fetchrow("""
+            SELECT * FROM player_stats_view WHERE playerid = $1
+        """, player_id)
+
+        if not player_stats:
+            await ctx.send("Error: Could not retrieve player stats.", ephemeral=True)
+            return
+
+        player_stats = dict(player_stats)
 
         # Get battle state
         battle_state = await self.get_instance_state(instance_id)
@@ -362,9 +670,22 @@ class BattleSystem(Extension):
             player_stats, target_enemy
         )
 
+        # Get player username for messages
+        player_discord_id = await self.db.fetchval("""
+            SELECT discord_id FROM players WHERE playerid = $1
+        """, player_id)
+        player_user = await self.bot.fetch_user(player_discord_id) if player_discord_id else None
+        player_name = player_user.display_name if player_user else f"Player {player_id}"
+        
         if is_blocked:
+            message = f"🛡️ {player_name}'s attack on {target_enemy['name']} was blocked!"
+            if battle_state['instance_type'] == 'party':
+                await self.send_battle_message(instance_id, message)
             await ctx.send(f"{target_enemy['name']} blocked your attack!", ephemeral=True)
         elif not hit_success:
+            message = f"❌ {player_name} missed their attack on {target_enemy['name']}!"
+            if battle_state['instance_type'] == 'party':
+                await self.send_battle_message(instance_id, message)
             await ctx.send(f"You missed your attack on {target_enemy['name']}!", ephemeral=True)
         else:
             # Calculate damage
@@ -380,14 +701,19 @@ class BattleSystem(Extension):
                 instance_id, 'enemy', target_battle_enemy['battle_enemy_id'], new_health
             )
 
-            # Send combat message
-            message = f"You dealt {damage_dealt} damage to {target_enemy['name']}"
+            # Send combat message to channel for party visibility
+            message = f"⚔️ **{player_name}** dealt {damage_dealt} damage to {target_enemy['name']}"
             if is_critical:
-                message += " (Critical Hit!)"
-            message += f". Remaining enemy health: {new_health}"
-            await ctx.send(message, ephemeral=True)
+                message += " 💥 **Critical Hit!**"
+            message += f"\n{target_enemy['name']} health: {new_health}"
+            
+            if battle_state['instance_type'] == 'party':
+                await self.send_battle_message(instance_id, message)
+            await ctx.send(f"You dealt {damage_dealt} damage to {target_enemy['name']}" + 
+                          (" (Critical Hit!)" if is_critical else "") + 
+                          f". Remaining enemy health: {new_health}", ephemeral=True)
 
-            # Broadcast attack to other party members
+            # Broadcast attack to other party members (deprecated - now using channel messages)
             if battle_state['instance_type'] == 'party':
                 for participant in battle_state['participants']:
                     if participant['player_id'] != player_id:
@@ -413,21 +739,39 @@ class BattleSystem(Extension):
                         target_participant['player_id'], 
                         await self.db.fetchrow("""
                             SELECT * FROM enemies WHERE enemyid = $1
-                        """, battle_enemy['enemy_id'])
+                        """, battle_enemy['enemy_id']),
+                        instance_id
                     )
                     player_survived = player_survived and survived
         else:
-            player_survived = await self.enemy_attack(ctx, player_id, target_enemy)
+            player_survived = await self.enemy_attack(ctx, player_id, target_enemy, instance_id)
 
-        if player_survived:
-            # Refresh battle status after all enemies have attacked
-            battle_state = await self.get_instance_state(instance_id)
-            await self.refresh_battle_status(ctx, battle_state, player_id)
+        # Advance turn for party battles
+        if battle_state['instance_type'] == 'party':
+            next_player = await self.advance_turn(instance_id)
+            if next_player:
+                # Get channel from battle instance
+                channel_id = await self.db.fetchval("""
+                    SELECT channel_id FROM battle_instances WHERE instance_id = $1
+                """, instance_id)
+                channel = None
+                if channel_id:
+                    try:
+                        channel = await self.bot.fetch_channel(channel_id)
+                    except:
+                        pass
+                # Prompt next player
+                await self.prompt_next_player_turn(instance_id, next_player, channel)
+        else:
+            # Solo battle - refresh status
+            if player_survived:
+                battle_state = await self.get_instance_state(instance_id)
+                await self.refresh_battle_status(ctx, battle_state, player_id)
 
         # Check combat end
         await self.handle_combat_end(ctx, player_id, target_enemy)
 
-    async def enemy_attack(self, ctx, player_id, enemy):
+    async def enemy_attack(self, ctx, player_id, enemy, instance_id=None):
         # Fetch player stats from the view
         player_stats = await self.db.fetchrow("""
             SELECT * FROM player_stats_view WHERE playerid = $1
@@ -478,10 +822,29 @@ class BattleSystem(Extension):
             enemy, player_stats
         )
 
+        # Get player username for messages
+        player_discord_id = await self.db.fetchval("""
+            SELECT discord_id FROM players WHERE playerid = $1
+        """, player_id)
+        player_user = await self.bot.fetch_user(player_discord_id) if player_discord_id else None
+        player_name = player_user.display_name if player_user else f"Player {player_id}"
+        
+        # Check if this is a party battle
+        is_party = False
+        if instance_id:
+            battle_state = await self.get_instance_state(instance_id)
+            is_party = battle_state and battle_state.get('instance_type') == 'party'
+        
         if is_blocked:
+            message = f"🛡️ {player_name} blocked {enemy['name']}'s attack!"
+            if is_party:
+                await self.send_battle_message(instance_id, message)
             await ctx.send(f"You blocked {enemy['name']}'s attack!", ephemeral=True)
             return True
         elif not hit_success:
+            message = f"❌ {enemy['name']} missed their attack on {player_name}!"
+            if is_party:
+                await self.send_battle_message(instance_id, message)
             await ctx.send(f"{enemy['name']} missed their attack!", ephemeral=True)
             return True
         else:
@@ -501,11 +864,31 @@ class BattleSystem(Extension):
             new_health = current_stats['health'] - damage_received
             new_health = max(0, new_health)  # Ensure health doesn't go below 0
             
-            await self.db.execute("""
-                UPDATE player_data
-                SET health = $1
-                WHERE playerid = $2
-            """, new_health, player_id)
+            # Update health in battle instance if party battle
+            if is_party and instance_id:
+                await self.update_battle_health(instance_id, 'player', player_id, new_health)
+            else:
+                await self.db.execute("""
+                    UPDATE player_data
+                    SET health = $1
+                    WHERE playerid = $2
+                """, new_health, player_id)
+            
+            # Send combat message to channel for party visibility
+            message = f"💥 **{enemy['name']}** attacked **{player_name}** for {damage_received} damage"
+            if is_critical:
+                message += " 💥 **Critical Hit!**"
+            message += f"\n{player_name}'s health: {new_health}"
+            
+            if is_party:
+                await self.send_battle_message(instance_id, message)
+            
+            # Also send personal message
+            personal_message = f"{enemy['name']} dealt {damage_received} damage to you"
+            if is_critical:
+                personal_message += " (Critical Hit!)"
+            personal_message += f". Your health: {new_health}"
+            await ctx.send(personal_message, ephemeral=True)
 
             # Send combat message
             message = f"{enemy['name']} dealt {damage_received} damage to you"
@@ -566,12 +949,34 @@ class BattleSystem(Extension):
 
         if all_enemies_defeated:
             # Victory message
-            await ctx.send("All enemies have been defeated!", ephemeral=True)
+            # Send victory message to channel for party visibility
+            if battle_state['instance_type'] == 'party':
+                await self.send_battle_message(instance_id, "🎉 **Victory!** All enemies have been defeated!")
+            await ctx.send("🎉 All enemies have been defeated!", ephemeral=True)
             
-            # Handle rewards for each participant
+            # Collect all loot from all defeated enemies
+            all_loot = []
+            for battle_enemy in battle_state['enemies']:
+                enemy_loot = await self.handle_enemy_defeat(ctx, instance_id, battle_enemy['enemy_id'])
+                all_loot.extend(enemy_loot)
+            
+            # Distribute loot to party members
+            if all_loot:
+                await self.distribute_party_loot(instance_id, all_loot)
+            
+            # Notify all party members of victory
             for participant in battle_state['participants']:
-                if participant['current_health'] > 0:  # Only reward surviving members
-                    await self.handle_enemy_defeat(ctx, participant['player_id'], enemy['enemyid'])
+                if participant['current_health'] > 0:
+                    try:
+                        discord_id = await self.db.fetchval("""
+                            SELECT discord_id FROM players WHERE playerid = $1
+                        """, participant['player_id'])
+                        if discord_id and participant['player_id'] != player_id:
+                            user = await self.bot.fetch_user(discord_id)
+                            if user:
+                                await user.send("🎉 Victory! All enemies have been defeated!")
+                    except:
+                        pass
 
             # Clean up
             await self.end_battle_instance(instance_id)
@@ -582,6 +987,8 @@ class BattleSystem(Extension):
 
         if all_players_defeated:
             # Defeat message
+            if battle_state['instance_type'] == 'party':
+                await self.send_battle_message(instance_id, "💀 **Defeat!** All party members have fallen!")
             await ctx.send("All party members have fallen!", ephemeral=True)
             
             # Set health to 0 for all participants
@@ -599,44 +1006,11 @@ class BattleSystem(Extension):
                     del self.active_battles[participant['player_id']]
             return
 
-        # If battle continues and this is a party battle, check if we need to update the UI for anyone
-        if battle_state['instance_type'] == 'party':
-            for participant in battle_state['participants']:
-                if participant['current_health'] > 0:  # Only prompt active players
-                    # Create a new context for each participant
-                    member_ctx = await self.bot.get_context(ctx.message)
-                    member_ctx.author = await self.bot.fetch_user(participant['player_id'])
-                    
-                    # Get their stats
-                    player_stats = await self.db.fetchrow("""
-                        SELECT * FROM player_stats_view WHERE playerid = $1
-                    """, participant['player_id'])
+        # Turn system now handles prompting next player automatically
+        # This old code is no longer needed
 
-                    # Find their target enemy (for now, use the first living enemy)
-                    target_enemy = None
-                    for battle_enemy in battle_state['enemies']:
-                        if battle_enemy['current_health'] > 0:
-                            enemy_data = await self.db.fetchrow("""
-                                SELECT * FROM enemies WHERE enemyid = $1
-                            """, battle_enemy['enemy_id'])
-                            target_enemy = enemy_data
-                            target_battle_enemy = battle_enemy
-                            break
-
-                    if target_enemy:
-                        await self.prompt_player_action(
-                            member_ctx,
-                            participant['player_id'],
-                            participant['current_health'],
-                            target_enemy,
-                            target_battle_enemy['current_health'],
-                            self.extract_attributes(player_stats),
-                            self.extract_attributes(target_enemy),
-                            self.extract_resistances(player_stats),
-                            self.extract_resistances(target_enemy)
-                        )
-
-    async def handle_enemy_defeat(self, ctx: SlashContext, player_id: int, enemy_id: int):
+    async def handle_enemy_defeat(self, ctx: SlashContext, instance_id: int, enemy_id: int):
+        """Handle enemy defeat and distribute loot to party members."""
         # Fetch drop chances for this enemy
         drop_list = await self.db.fetch("""
             SELECT itemid, droprate, quantity
@@ -645,11 +1019,83 @@ class BattleSystem(Extension):
         """, enemy_id)
 
         if not drop_list:
-            await ctx.send("No loot available from this enemy.", ephemeral=True)
-            return
+            return []  # Return empty list if no loot
 
-        # Determine which items are dropped
-        await self.roll_for_loot(ctx, player_id, drop_list)
+        # Roll for all loot
+        all_drops = []
+        for drop in drop_list:
+            if random.uniform(0, 100) <= drop['droprate']:
+                all_drops.append({
+                    'itemid': int(drop['itemid']),
+                    'quantity': drop['quantity']
+                })
+        
+        return all_drops
+    
+    async def distribute_party_loot(self, instance_id: int, all_loot: list):
+        """Distribute loot equally among party members."""
+        # Get all surviving party members
+        participants = await self.db.fetch("""
+            SELECT bp.player_id, bp.is_leader
+            FROM battle_participants bp
+            WHERE bp.instance_id = $1 AND bp.current_health > 0
+        """, instance_id)
+        
+        if not participants or not all_loot:
+            return
+        
+        party_size = len(participants)
+        # Find leader (or use first participant if no leader marked)
+        leader_id = None
+        for p in participants:
+            if p.get('is_leader'):
+                leader_id = p['player_id']
+                break
+        if not leader_id and participants:
+            leader_id = participants[0]['player_id']  # Default to first if no leader
+        
+        # Distribute each item
+        for loot_item in all_loot:
+            itemid = loot_item['itemid']
+            total_quantity = loot_item['quantity']
+            
+            # Get item name
+            item_name = await self.db.fetchval("SELECT name FROM items WHERE itemid = $1", itemid)
+            if not item_name:
+                continue
+            
+            # Split quantity equally
+            per_person = total_quantity // party_size
+            remainder = total_quantity % party_size
+            
+            # Distribute to each member
+            for participant in participants:
+                quantity_to_give = per_person
+                if participant['player_id'] == leader_id:
+                    quantity_to_give += remainder  # Leader gets remainder
+                
+                if quantity_to_give > 0:
+                    # Check inventory space
+                    has_space = await self.db.can_add_to_inventory(participant['player_id'], 1)
+                    if has_space:
+                        await self.db.execute("""
+                            INSERT INTO inventory (playerid, itemid, quantity, isequipped)
+                            VALUES ($1, $2, $3, false)
+                            ON CONFLICT (playerid, itemid) DO UPDATE 
+                            SET quantity = inventory.quantity + $3
+                        """, participant['player_id'], itemid, quantity_to_give)
+                        
+                        # Notify player
+                        try:
+                            discord_id = await self.db.fetchval("""
+                                SELECT discord_id FROM players WHERE playerid = $1
+                            """, participant['player_id'])
+                            if discord_id:
+                                user = await self.bot.fetch_user(discord_id)
+                                if user:
+                                    await user.send(f"🎁 You received **{quantity_to_give}x {item_name}** from the battle!")
+                        except:
+                            pass
 
     async def roll_for_loot(self, ctx, player_id, drop_list):
         for drop in drop_list:
@@ -682,6 +1128,92 @@ class BattleSystem(Extension):
 
                 await ctx.send(f"x** {quantity}  {item['name']}!** Added to your inventory.", ephemeral=True)
 
+    @component_callback(re.compile(r"^ability_select_\d+$"))
+    async def ability_select_handler(self, ctx: ComponentContext):
+        """Handle ability button click - show enemy selection if multiple enemies."""
+        # Extract player ID from the custom ID
+        _, _, player_id = ctx.custom_id.split("_")
+        player_id = int(player_id)
+        
+        # Verify player
+        player_data = await self.db.fetchrow("""
+            SELECT playerid FROM players WHERE discord_id = $1
+        """, ctx.author.id)
+        
+        if not player_data or player_data['playerid'] != player_id:
+            await ctx.send("You are not authorized to use this button.", ephemeral=True)
+            return
+        
+        await ctx.defer(ephemeral=True)
+        
+        # Get battle instance
+        instance_id = await self.get_player_battle_instance(player_id)
+        if not instance_id:
+            await ctx.send("No active battle found.", ephemeral=True)
+            return
+        
+        # Check if it's this player's turn
+        current_turn_player = await self.get_current_turn_player(instance_id)
+        if current_turn_player and current_turn_player != player_id:
+            await ctx.send("⏳ It's not your turn! Please wait for your turn.", ephemeral=True)
+            return
+        
+        # Get battle state
+        battle_state = await self.get_instance_state(instance_id)
+        if not battle_state:
+            await ctx.send("Error: Could not retrieve battle state.", ephemeral=True)
+            return
+        
+        # Get living enemies
+        living_enemies = []
+        for battle_enemy in battle_state['enemies']:
+            if battle_enemy['current_health'] > 0:
+                enemy_data = await self.db.fetchrow("""
+                    SELECT * FROM enemies WHERE enemyid = $1
+                """, battle_enemy['enemy_id'])
+                if enemy_data:
+                    living_enemies.append({
+                        'battle_enemy': battle_enemy,
+                        'enemy_data': enemy_data
+                    })
+        
+        if not living_enemies:
+            await ctx.send("No enemies to target.", ephemeral=True)
+            return
+        
+        # If only one enemy, proceed directly to ability selection
+        if len(living_enemies) == 1:
+            enemy_id = living_enemies[0]['enemy_data']['enemyid']
+            # Call the original ability handler with enemy_id
+            await self.show_ability_selection(ctx, player_id, enemy_id, instance_id)
+            return
+        
+        # Multiple enemies - show selection
+        embed = Embed(
+            title="Select Target",
+            description="Choose which enemy to target with your ability:",
+            color=0xFF0000
+        )
+        
+        enemy_buttons = []
+        for i, enemy_info in enumerate(living_enemies):
+            enemy = enemy_info['enemy_data']
+            battle_enemy = enemy_info['battle_enemy']
+            enemy_buttons.append(
+                Button(
+                    style=ButtonStyle.DANGER,
+                    label=f"{enemy['name']} (HP: {battle_enemy['current_health']})",
+                    custom_id=f"ability_{player_id}_{enemy['enemyid']}"
+                )
+            )
+        
+        # Group buttons into rows
+        button_rows = []
+        for i in range(0, len(enemy_buttons), 5):
+            button_rows.append(ActionRow(*enemy_buttons[i:i+5]))
+        
+        await ctx.send(embeds=[embed], components=button_rows, ephemeral=True)
+    
     @component_callback(re.compile(r"^ability_\d+_\d+$"))
     async def ability_button_handler(self, ctx: ComponentContext):
         try:
@@ -720,46 +1252,59 @@ class BattleSystem(Extension):
 
             # Proceed if authorized
             await ctx.defer(ephemeral=True)
-
-            # Fetch the player's equipped abilities
-            abilities = await self.db.fetch("""
-                SELECT pa.*, a.*
-                FROM player_abilities pa
-                JOIN abilities a ON pa.ability_id = a.ability_id
-                WHERE pa.playerid = $1 AND pa.is_equipped = TRUE
-                ORDER BY a.ability_type, a.name
-            """, actual_player_id)
-
-            if not abilities:
-                await ctx.send("You have no equipped abilities to use.", ephemeral=True)
+            
+            # Get battle instance
+            instance_id = await self.get_player_battle_instance(actual_player_id)
+            if not instance_id:
+                await ctx.send("No active battle found.", ephemeral=True)
                 return
 
-            # Create buttons for each equipped ability
-            ability_buttons = [
-                Button(
-                    style=ButtonStyle.SECONDARY,
-                    label=ability['name'],
-                    custom_id=f"cast_ability_{actual_player_id}_{enemy_id}_{ability['ability_id']}"
-                ) for ability in abilities
-            ]
-
-            # Group buttons into rows of up to 5 buttons each
-            button_rows = []
-            for i in range(0, len(ability_buttons), 5):
-                button_rows.append(ability_buttons[i:i+5])
-
-            # Send the prompt for the player to choose an ability
-            await ctx.send(
-                content="Choose an ability to use:",
-                components=button_rows,
-                ephemeral=True
-            )
-
+            # Show ability selection
+            await self.show_ability_selection(ctx, actual_player_id, enemy_id, instance_id)
+        
         except Exception as e:
-            print(f"[Error] Failed to process ability button: {e}")
+            logging.error(f"Error in ability_button_handler: {e}")
+            import traceback
+            traceback.print_exc()
             await ctx.send("Error: Could not process ability selection.", ephemeral=True)
+    
+    async def show_ability_selection(self, ctx: ComponentContext, player_id: int, enemy_id: int, instance_id: int):
+        """Show ability selection menu for a specific enemy."""
+        # Fetch the player's equipped abilities
+        abilities = await self.db.fetch("""
+            SELECT pa.*, a.*
+            FROM player_abilities pa
+            JOIN abilities a ON pa.ability_id = a.ability_id
+            WHERE pa.playerid = $1 AND pa.is_equipped = TRUE
+            ORDER BY a.ability_type, a.name
+        """, player_id)
 
-    async def calculate_ability_hit(self, attacker_stats: dict, defender_stats: dict, ability_type: str) -> tuple[bool, bool]:
+        if not abilities:
+            await ctx.send("You have no equipped abilities to use.", ephemeral=True)
+            return
+
+        # Create buttons for each equipped ability
+        ability_buttons = [
+            Button(
+                style=ButtonStyle.SECONDARY,
+                label=ability['name'],
+                custom_id=f"cast_ability_{player_id}_{enemy_id}_{ability['ability_id']}"
+            ) for ability in abilities
+        ]
+
+        # Group buttons into rows of up to 5 buttons each
+        button_rows = []
+        for i in range(0, len(ability_buttons), 5):
+            button_rows.append(ActionRow(*ability_buttons[i:i+5]))
+
+        # Send the prompt for the player to choose an ability
+        await ctx.send(
+            content="Choose an ability to use:",
+            components=button_rows,
+            ephemeral=True
+        )
+
+    def calculate_ability_hit(self, attacker_stats: dict, defender_stats: dict, ability_type: str) -> tuple[bool, bool]:
         """
         Calculate if an ability hits and if it crits.
         Returns: (hit_success, is_critical)
@@ -802,13 +1347,27 @@ class BattleSystem(Extension):
                 await ctx.send("Error: Could not find ability.", ephemeral=True)
                 return
 
+            # Verify player identity
+            player_data = await self.db.fetchrow("""
+                SELECT playerid FROM players WHERE discord_id = $1
+            """, ctx.author.id)
+            
+            if not player_data or player_data['playerid'] != player_id:
+                await ctx.send("You are not authorized to use this ability.", ephemeral=True)
+                return
+            
             # Get battle instance data
-            if player_id not in self.active_battles:
+            instance_id = await self.get_player_battle_instance(player_id)
+            if not instance_id:
                 await ctx.send("No active battle found.", ephemeral=True)
                 return
-
-            battle_data = self.active_battles[player_id]
-            instance_id = battle_data['instance_id']
+            
+            # Check if it's this player's turn (for party battles)
+            current_turn_player = await self.get_current_turn_player(instance_id)
+            if current_turn_player and current_turn_player != player_id:
+                await ctx.send("⏳ It's not your turn! Please wait for your turn.", ephemeral=True)
+                return
+            
             battle_state = await self.get_instance_state(instance_id)
 
             # Find the target enemy in the battle
@@ -853,12 +1412,25 @@ class BattleSystem(Extension):
                 await ctx.send("Not enough mana to use this ability!", ephemeral=True)
                 return
 
+            # Get player username for messages
+            player_discord_id = await self.db.fetchval("""
+                SELECT discord_id FROM players WHERE playerid = $1
+            """, player_id)
+            player_user = await self.bot.fetch_user(player_discord_id) if player_discord_id else None
+            player_name = player_user.display_name if player_user else f"Player {player_id}"
+            
+            # Get enemy stats for hit calculation
+            enemy_stats = self.extract_attributes(target_enemy)
+            
             # Calculate ability hit success
-            hit_success, is_critical = await self.calculate_ability_hit(
-                player_stats, target_enemy, ability['ability_type']
+            hit_success, is_critical = self.calculate_ability_hit(
+                player_stats, enemy_stats, ability['ability_type']
             )
 
             if not hit_success:
+                message = f"❌ **{player_name}**'s {ability['name']} missed {target_enemy['name']}!"
+                if battle_state['instance_type'] == 'party':
+                    await self.send_battle_message(instance_id, message)
                 await ctx.send(f"Your {ability['name']} missed {target_enemy['name']}!", ephemeral=True)
             else:
                 # Calculate damage
@@ -883,13 +1455,21 @@ class BattleSystem(Extension):
                     instance_id, 'player', player_id, participant['current_health'], new_mana
                 )
 
-                # Send combat message
-                message = f"You used {ability['name']} and dealt {damage_dealt} damage"
+                # Send combat message to channel for party visibility
+                message = f"✨ **{player_name}** used **{ability['name']}** and dealt {damage_dealt} damage to {target_enemy['name']}"
                 if is_critical:
-                    message += " (Critical Hit!)"
-                message += f". Remaining enemy health: {new_health}"
-                message += f"\nMana remaining: {new_mana}"
-                await ctx.send(message, ephemeral=True)
+                    message += " 💥 **Critical Hit!**"
+                message += f"\n{target_enemy['name']} health: {new_health} | {player_name}'s mana: {new_mana}"
+                
+                if battle_state['instance_type'] == 'party':
+                    await self.send_battle_message(instance_id, message)
+                
+                # Also send personal message
+                personal_message = f"You used {ability['name']} and dealt {damage_dealt} damage"
+                if is_critical:
+                    personal_message += " (Critical Hit!)"
+                personal_message += f". Remaining enemy health: {new_health}\nMana remaining: {new_mana}"
+                await ctx.send(personal_message, ephemeral=True)
 
                 # Handle status effects
                 if ability.get('status_effect'):
@@ -921,23 +1501,43 @@ class BattleSystem(Extension):
                             target_participant['player_id'], 
                             await self.db.fetchrow("""
                                 SELECT * FROM enemies WHERE enemyid = $1
-                            """, battle_enemy['enemy_id'])
+                            """, battle_enemy['enemy_id']),
+                            instance_id
                         )
                         player_survived = player_survived and survived
             else:
-                player_survived = await self.enemy_attack(ctx, player_id, target_enemy)
+                player_survived = await self.enemy_attack(ctx, player_id, target_enemy, instance_id)
 
-            if player_survived:
-                # Refresh battle status after all enemies have attacked
-                battle_state = await self.get_instance_state(instance_id)
-                await self.refresh_battle_status(ctx, battle_state, player_id)
+            # Advance turn for party battles
+            if battle_state['instance_type'] == 'party':
+                next_player = await self.advance_turn(instance_id)
+                if next_player:
+                    # Get channel from battle instance
+                    channel_id = await self.db.fetchval("""
+                        SELECT channel_id FROM battle_instances WHERE instance_id = $1
+                    """, instance_id)
+                    channel = None
+                    if channel_id:
+                        try:
+                            channel = await self.bot.fetch_channel(channel_id)
+                        except:
+                            pass
+                    # Prompt next player
+                    await self.prompt_next_player_turn(instance_id, next_player, channel)
+            else:
+                # Solo battle - refresh status
+                if player_survived:
+                    battle_state = await self.get_instance_state(instance_id)
+                    await self.refresh_battle_status(ctx, battle_state, player_id)
 
             # Check combat end
             await self.handle_combat_end(ctx, player_id, target_enemy)
 
         except Exception as e:
-            print(f"[Error] Failed to process ability cast: {e}")
-            await ctx.send("Error: Could not process ability cast.", ephemeral=True)
+            logging.error(f"Error in cast_ability_handler: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send(f"Error: Could not process ability cast. {str(e)}", ephemeral=True)
 
     @staticmethod
     def get_damage_resistance_mapping():
@@ -1000,12 +1600,104 @@ class BattleSystem(Extension):
     async def create_battle_instance(self, ctx: SlashContext, location_id: int, instance_type: str = 'solo', max_players: int = 1):
         """Create a new battle instance."""
         instance = await self.db.fetchrow("""
-            INSERT INTO battle_instances (instance_type, location_id, max_players)
-            VALUES ($1, $2, $3)
+            INSERT INTO battle_instances (instance_type, location_id, max_players, phase)
+            VALUES ($1, $2, $3, 'player_turn')
             RETURNING instance_id
         """, instance_type, location_id, max_players)
         
         return instance['instance_id']
+    
+    async def initialize_turn_order(self, instance_id: int):
+        """Initialize turn order for party battles based on agility (highest first)."""
+        # Get all participants with their agility
+        participants = await self.db.fetch("""
+            SELECT bp.player_id, COALESCE(psv.total_agility, pd.agility, 10) as agility
+            FROM battle_participants bp
+            JOIN player_data pd ON bp.player_id = pd.playerid
+            LEFT JOIN player_stats_view psv ON bp.player_id = psv.playerid
+            WHERE bp.instance_id = $1 AND bp.current_health > 0
+            ORDER BY agility DESC, bp.player_id
+        """, instance_id)
+        
+        if not participants:
+            return None
+        
+        # Create turn order array
+        turn_order = [p['player_id'] for p in participants]
+        
+        # Set first player as current turn
+        current_turn_player = turn_order[0] if turn_order else None
+        
+        # Update battle instance with turn order
+        await self.db.execute("""
+            UPDATE battle_instances
+            SET turn_order = $1, current_turn_player_id = $2, turn_number = 0
+            WHERE instance_id = $3
+        """, turn_order, current_turn_player, instance_id)
+        
+        return current_turn_player
+    
+    async def get_current_turn_player(self, instance_id: int):
+        """Get the player whose turn it is."""
+        return await self.db.fetchval("""
+            SELECT current_turn_player_id FROM battle_instances
+            WHERE instance_id = $1 AND is_active = true
+        """, instance_id)
+    
+    async def advance_turn(self, instance_id: int):
+        """Advance to the next player's turn. Returns next player_id or None if round complete."""
+        battle = await self.db.fetchrow("""
+            SELECT turn_order, current_turn_player_id, turn_number
+            FROM battle_instances
+            WHERE instance_id = $1
+        """, instance_id)
+        
+        if not battle or not battle['turn_order']:
+            return None
+        
+        turn_order = battle['turn_order']
+        current_player = battle['current_turn_player_id']
+        turn_number = battle['turn_number'] or 0
+        
+        # Find current player index
+        try:
+            current_index = turn_order.index(current_player)
+        except ValueError:
+            current_index = 0
+        
+        # Get next player (skip dead players)
+        next_index = (current_index + 1) % len(turn_order)
+        next_player = turn_order[next_index]
+        
+        # Check if we've completed a full round
+        if next_index == 0:
+            turn_number += 1
+        
+        # Skip dead players
+        attempts = 0
+        while attempts < len(turn_order):
+            # Check if next player is alive
+            participant = await self.db.fetchrow("""
+                SELECT current_health FROM battle_participants
+                WHERE instance_id = $1 AND player_id = $2
+            """, instance_id, next_player)
+            
+            if participant and participant['current_health'] > 0:
+                break
+            
+            # Player is dead, move to next
+            next_index = (next_index + 1) % len(turn_order)
+            next_player = turn_order[next_index]
+            attempts += 1
+        
+        # Update battle instance
+        await self.db.execute("""
+            UPDATE battle_instances
+            SET current_turn_player_id = $1, turn_number = $2
+            WHERE instance_id = $3
+        """, next_player, turn_number, instance_id)
+        
+        return next_player
 
     async def add_player_to_instance(self, instance_id: int, player_id: int, is_leader: bool = False):
         """Add a player to a battle instance."""
@@ -1116,6 +1808,201 @@ class BattleSystem(Extension):
             WHERE instance_id = $1
         """, instance_id)
 
+    async def get_player_battle_instance(self, player_id: int):
+        """Get active battle instance for a player from database."""
+        return await self.db.fetchval("""
+            SELECT bi.instance_id FROM battle_instances bi
+            JOIN battle_participants bp ON bi.instance_id = bp.instance_id
+            WHERE bp.player_id = $1 AND bi.is_active = true
+            ORDER BY bi.created_at DESC
+            LIMIT 1
+        """, player_id)
+    
+    async def send_battle_message(self, instance_id: int, message: str, embed: Embed = None):
+        """Send a message to the battle channel for party visibility."""
+        try:
+            channel_id = await self.db.fetchval("""
+                SELECT channel_id FROM battle_instances WHERE instance_id = $1
+            """, instance_id)
+            
+            if channel_id:
+                channel = await self.bot.fetch_channel(channel_id)
+                if channel:
+                    if embed:
+                        await channel.send(content=message, embeds=[embed])
+                    else:
+                        await channel.send(message)
+                    return True
+        except Exception as e:
+            logging.error(f"Error sending battle message: {e}")
+        return False
+    
+    async def prompt_next_player_turn(self, instance_id: int, player_id: int, channel=None):
+        """Prompt the next player whose turn it is. Sends to channel if provided, otherwise DM."""
+        try:
+            battle_state = await self.get_instance_state(instance_id)
+            if not battle_state:
+                logging.error(f"No battle state found for instance {instance_id}")
+                return
+            
+            # Get player stats
+            player_stats = await self.db.fetchrow("""
+                SELECT * FROM player_stats_view WHERE playerid = $1
+            """, player_id)
+            
+            if not player_stats:
+                logging.error(f"No player stats found for player {player_id}")
+                return
+            
+            # Find first living enemy
+            target_enemy = None
+            target_battle_enemy = None
+            for battle_enemy in battle_state['enemies']:
+                if battle_enemy['current_health'] > 0:
+                    enemy_data = await self.db.fetchrow("""
+                        SELECT * FROM enemies WHERE enemyid = $1
+                    """, battle_enemy['enemy_id'])
+                    if enemy_data:
+                        target_enemy = enemy_data
+                        target_battle_enemy = battle_enemy
+                        break
+            
+            if not target_enemy:
+                logging.error(f"No living enemies found in battle {instance_id}")
+                return
+            
+            participant = next((p for p in battle_state['participants'] if p['player_id'] == player_id), None)
+            if not participant:
+                logging.error(f"Player {player_id} not found in battle participants")
+                return
+            
+            # Get player's Discord ID and username
+            discord_id = await self.db.fetchval("""
+                SELECT discord_id FROM players WHERE playerid = $1
+            """, player_id)
+            
+            if not discord_id:
+                logging.error(f"No Discord ID found for player {player_id}")
+                return
+            
+            user = await self.bot.fetch_user(discord_id)
+            if not user:
+                logging.error(f"Could not fetch Discord user for ID {discord_id}")
+                return
+            
+            # If channel is provided, send to channel and mention the player
+            if channel:
+                try:
+                    # Create embed showing all party members and enemies
+                    embed = Embed(
+                        title=f"⚔️ {user.display_name}'s Turn!",
+                        description=f"It's **{user.mention}**'s turn to act!",
+                        color=0xFF0000
+                    )
+                    
+                    # Add all party members' status
+                    for p in battle_state['participants']:
+                        try:
+                            p_discord_id = await self.db.fetchval("""
+                                SELECT discord_id FROM players WHERE playerid = $1
+                            """, p['player_id'])
+                            if p_discord_id:
+                                p_user = await self.bot.fetch_user(p_discord_id)
+                                p_name = p_user.display_name if p_user else f"Player {p['player_id']}"
+                            else:
+                                p_name = f"Player {p['player_id']}"
+                        except:
+                            p_name = f"Player {p['player_id']}"
+                        
+                        is_current_turn = " 👈" if p['player_id'] == player_id else ""
+                        status_icon = "💀" if p['current_health'] <= 0 else "❤️"
+                        embed.add_field(
+                            name=f"{p_name}{is_current_turn}",
+                            value=f"{status_icon} Health: {p['current_health']}\n✨ Mana: {p['current_mana']}",
+                            inline=True
+                        )
+                    
+                    # Add all enemies' status
+                    for battle_enemy in battle_state['enemies']:
+                        if battle_enemy['current_health'] > 0:
+                            enemy_data = await self.db.fetchrow("""
+                                SELECT * FROM enemies WHERE enemyid = $1
+                            """, battle_enemy['enemy_id'])
+                            if enemy_data:
+                                status_icon = "💀" if battle_enemy['current_health'] <= 0 else "👹"
+                                embed.add_field(
+                                    name=f"{enemy_data['name']}",
+                                    value=f"{status_icon} Health: {battle_enemy['current_health']}",
+                                    inline=True
+                                )
+                    
+                    # Count living enemies
+                    living_enemies = [be for be in battle_state['enemies'] if be['current_health'] > 0]
+                    
+                    # Create action buttons - if multiple enemies, buttons will trigger selection
+                    buttons = ActionRow(
+                        Button(
+                            style=ButtonStyle.PRIMARY,
+                            label="Attack",
+                            custom_id=f"attack_select_{player_id}"
+                        ),
+                        Button(
+                            style=ButtonStyle.SECONDARY,
+                            label="Use Ability",
+                            custom_id=f"ability_select_{player_id}"
+                        ),
+                        Button(
+                            style=ButtonStyle.DANGER,
+                            label="Flee Battle",
+                            custom_id=f"flee_{player_id}"
+                        )
+                    )
+                    
+                    # Send buttons to channel
+                    turn_message = await channel.send(content=user.mention, embeds=[embed], components=[buttons])
+                    logging.info(f"Sent turn prompt to channel {channel.id} for player {player_id} (message ID: {turn_message.id})")
+                    
+                    # Update battle instance with turn message ID for reference
+                    await self.db.execute("""
+                        UPDATE battle_instances
+                        SET message_id = $1
+                        WHERE instance_id = $2
+                    """, turn_message.id, instance_id)
+                except Exception as e:
+                    logging.error(f"Error sending turn prompt to channel: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Fallback to DM
+                    await self.prompt_player_action(
+                        None,
+                        player_id,
+                        participant['current_health'],
+                        target_enemy,
+                        target_battle_enemy['current_health'],
+                        self.extract_attributes(player_stats),
+                        self.extract_attributes(target_enemy),
+                        self.extract_resistances(player_stats),
+                        self.extract_resistances(target_enemy)
+                    )
+            else:
+                # Fallback to DM if no channel
+                logging.info(f"No channel provided, sending DM to player {player_id}")
+                await self.prompt_player_action(
+                    None,
+                    player_id,
+                    participant['current_health'],
+                    target_enemy,
+                    target_battle_enemy['current_health'],
+                    self.extract_attributes(player_stats),
+                    self.extract_attributes(target_enemy),
+                    self.extract_resistances(player_stats),
+                    self.extract_resistances(target_enemy)
+                )
+        except Exception as e:
+            logging.error(f"Error in prompt_next_player_turn: {e}")
+            import traceback
+            traceback.print_exc()
+    
     async def refresh_battle_status(self, ctx: SlashContext, battle_state, player_id: int):
         """Refresh the battle status embed with current health/mana values and action buttons."""
         embed = Embed(
@@ -1168,11 +2055,11 @@ class BattleSystem(Extension):
         # Send embed with all buttons in one row
         await ctx.send(embeds=[embed], components=[buttons], ephemeral=True)
 
-    @component_callback(re.compile(r"^flee_\d+_\d+$"))
+    @component_callback(re.compile(r"^flee_\d+$"))
     async def flee_button_handler(self, ctx: ComponentContext):
-        # Extract player ID and enemy ID from the custom ID
-        _, player_id, enemy_id = ctx.custom_id.split("_")
-        player_id, enemy_id = int(player_id), int(enemy_id)
+        # Extract player ID from the custom ID
+        _, player_id = ctx.custom_id.split("_")
+        player_id = int(player_id)
 
         # Fetch player stats from the view
         player_stats = await self.db.fetchrow("""
@@ -1244,7 +2131,7 @@ class BattleSystem(Extension):
                 if not player_survived:
                     break
                     
-                player_survived = await self.enemy_attack(ctx, player_id, enemy)
+                player_survived = await self.enemy_attack(ctx, player_id, enemy, instance_id)
                 
             if player_survived:
                 # Refresh battle status after enemy attacks
