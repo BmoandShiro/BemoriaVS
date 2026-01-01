@@ -98,6 +98,10 @@ bot.fishing_module = FishingModule(bot)
 shop_manager = ShopManager(bot)
 bot.shop_manager = shop_manager
 
+# Load Walt's Weapons shop extension
+from Walts_Weapons import setup as walts_setup
+walts_setup(bot)
+
 mining_setup(bot)
 
 battle_system_setup(bot)

@@ -48,6 +48,51 @@ class SmithModule(Extension):
             'Iron Hatchet': {'bar_id': 230, 'bar_amount': 3},  # 3 Iron Bars
         }
         self.tool_recipes = {}  # Will be populated with item IDs
+        
+        # Define crafting requirements for weapons
+        # Format: weapon_itemid: {'bar_id': bar_itemid, 'bar_amount': quantity, 'smithing_level': level}
+        # Bronze Weapons (itemid 71-78)
+        self.weapon_recipes = {
+            71: {'bar_id': 210, 'bar_amount': 1, 'smithing_level': 1},  # Bronze Dagger
+            72: {'bar_id': 210, 'bar_amount': 3, 'smithing_level': 4},  # Bronze Battle Axe
+            73: {'bar_id': 210, 'bar_amount': 2, 'smithing_level': 3},  # Bronze Hatchet
+            74: {'bar_id': 210, 'bar_amount': 2, 'smithing_level': 3},  # Bronze Short Sword
+            75: {'bar_id': 210, 'bar_amount': 3, 'smithing_level': 4},  # Bronze Long Sword
+            76: {'bar_id': 210, 'bar_amount': 4, 'smithing_level': 5},  # Bronze Greatsword
+            77: {'bar_id': 210, 'bar_amount': 3, 'smithing_level': 4},  # Bronze Polearm
+            78: {'bar_id': 210, 'bar_amount': 2, 'smithing_level': 3},  # Bronze Spear
+            
+            # Iron Weapons (itemid 79-86)
+            79: {'bar_id': 230, 'bar_amount': 1, 'smithing_level': 6},  # Iron Dagger
+            80: {'bar_id': 230, 'bar_amount': 3, 'smithing_level': 10}, # Iron Battle Axe
+            81: {'bar_id': 230, 'bar_amount': 2, 'smithing_level': 8},   # Iron Hatchet
+            82: {'bar_id': 230, 'bar_amount': 2, 'smithing_level': 8},   # Iron Short Sword
+            83: {'bar_id': 230, 'bar_amount': 3, 'smithing_level': 10}, # Iron Long Sword
+            84: {'bar_id': 230, 'bar_amount': 4, 'smithing_level': 12}, # Iron Greatsword
+            85: {'bar_id': 230, 'bar_amount': 3, 'smithing_level': 10}, # Iron Polearm
+            86: {'bar_id': 230, 'bar_amount': 2, 'smithing_level': 8},   # Iron Spear
+            
+            # Steel Weapons (itemid 87-94)
+            87: {'bar_id': 231, 'bar_amount': 1, 'smithing_level': 13},  # Steel Dagger
+            88: {'bar_id': 231, 'bar_amount': 3, 'smithing_level': 17},   # Steel Battle Axe
+            89: {'bar_id': 231, 'bar_amount': 2, 'smithing_level': 15},  # Steel Hatchet
+            90: {'bar_id': 231, 'bar_amount': 2, 'smithing_level': 15},  # Steel Short Sword
+            91: {'bar_id': 231, 'bar_amount': 3, 'smithing_level': 17},  # Steel Long Sword
+            92: {'bar_id': 231, 'bar_amount': 4, 'smithing_level': 20},  # Steel Greatsword
+            93: {'bar_id': 231, 'bar_amount': 3, 'smithing_level': 17},  # Steel Polearm
+            94: {'bar_id': 231, 'bar_amount': 2, 'smithing_level': 15},  # Steel Spear
+            
+            # Necrosteel Weapons (itemid 95-102)
+            # NOTE: Necrosteel Bar ID is set to 232 as placeholder - update if different
+            95: {'bar_id': 232, 'bar_amount': 1, 'smithing_level': 25},  # Necrosteel Dagger
+            96: {'bar_id': 232, 'bar_amount': 3, 'smithing_level': 30},   # Necrosteel Battle Axe
+            97: {'bar_id': 232, 'bar_amount': 2, 'smithing_level': 28},  # Necrosteel Hatchet
+            98: {'bar_id': 232, 'bar_amount': 2, 'smithing_level': 28},  # Necrosteel Short Sword
+            99: {'bar_id': 232, 'bar_amount': 3, 'smithing_level': 30},   # Necrosteel Long Sword
+            100: {'bar_id': 232, 'bar_amount': 4, 'smithing_level': 35},  # Necrosteel Greatsword
+            101: {'bar_id': 232, 'bar_amount': 3, 'smithing_level': 30}, # Necrosteel Polearm
+            102: {'bar_id': 232, 'bar_amount': 2, 'smithing_level': 28}, # Necrosteel Spear
+        }
 
     async def get_player_id(self, discord_id):
         """Fetch the player ID using the Discord ID."""
@@ -78,6 +123,17 @@ class SmithModule(Extension):
         except Exception as e:
             logging.error(f"Error in check_materials: {e}")
             return False
+
+    async def get_smithing_level(self, player_id: int) -> int:
+        """Get player's smithing level."""
+        try:
+            level = await self.db.fetchval("""
+                SELECT smithing_level FROM players WHERE playerid = $1
+            """, player_id)
+            return level if level is not None else 1
+        except Exception as e:
+            logging.error(f"Error in get_smithing_level: {e}")
+            return 1
 
     async def get_available_armor(self, player_id: int) -> List[Dict]:
         """Get list of armor that can be crafted based on player's inventory."""
@@ -265,7 +321,7 @@ class SmithModule(Extension):
             await ctx.send("An error occurred. Please try again.", ephemeral=True)
 
     async def display_smith_interface(self, ctx, player_id):
-        """Display the smithing interface with armor and tool selection."""
+        """Display the smithing interface with armor, tool, and weapon selection."""
         craft_armor_button = Button(
             style=ButtonStyle.PRIMARY,
             label="Craft Armor",
@@ -277,10 +333,16 @@ class SmithModule(Extension):
             label="Craft Tool",
             custom_id=f"smith_craft_tool_{player_id}"
         )
+        
+        craft_weapon_button = Button(
+            style=ButtonStyle.PRIMARY,
+            label="Craft Weapon",
+            custom_id=f"smith_craft_weapon_{player_id}"
+        )
 
         await ctx.send(
             content="Welcome to the smithy! Choose what to craft:",
-            components=[[craft_armor_button, craft_tool_button]],
+            components=[[craft_armor_button, craft_tool_button, craft_weapon_button]],
             ephemeral=True
         )
 
@@ -523,6 +585,219 @@ class SmithModule(Extension):
         except Exception as e:
             logging.error(f"Error in select_tool_handler: {e}")
             await ctx.send("An error occurred while crafting the tool. Please try again.", ephemeral=True)
+
+    async def get_available_weapons(self, player_id: int) -> List[Dict]:
+        """Get list of weapons that can be crafted based on player's inventory and smithing level."""
+        available_weapons = []
+        
+        # Get player's smithing level
+        player_level = await self.get_smithing_level(player_id)
+        
+        # First, check what bars the player has
+        bars = await self.db.fetch("""
+            SELECT i.itemid, i.quantity, items.name, items.description, items.type, items.rarity
+            FROM inventory i 
+            JOIN items ON i.itemid = items.itemid 
+            WHERE i.playerid = $1 
+            AND i.in_bank = FALSE
+            AND items.type = 'bar'
+            AND i.quantity > 0
+        """, player_id)
+        
+        if not bars:
+            logging.info(f"Player {player_id} has no bars in inventory for weapon crafting")
+            return []
+        
+        # Create a dict of bar quantities for easy lookup
+        bar_quantities = {bar['itemid']: bar['quantity'] for bar in bars}
+        
+        # For each weapon recipe, check if we have enough materials and level
+        for weapon_id, recipe in self.weapon_recipes.items():
+            # Check smithing level requirement
+            if player_level < recipe['smithing_level']:
+                continue
+            
+            # Check if we have enough of the required bar
+            available_qty = bar_quantities.get(recipe['bar_id'], 0)
+            has_materials = available_qty >= recipe['bar_amount']
+            
+            if not has_materials:
+                continue
+            
+            # Get weapon data
+            weapon_data = await self.db.fetchrow("""
+                SELECT itemid, name, description, type, rarity,
+                       slashing_damage, piercing_damage, crushing_damage, dark_damage
+                FROM items 
+                WHERE itemid = $1
+            """, weapon_id)
+            
+            if not weapon_data:
+                continue
+            
+            # Get bar data
+            bar_data = await self.db.fetchrow("""
+                SELECT name FROM items 
+                WHERE itemid = $1 AND type = 'bar'
+            """, recipe['bar_id'])
+            
+            if not bar_data:
+                continue
+            
+            # Calculate total damage
+            total_damage = (
+                (weapon_data['slashing_damage'] or 0) +
+                 (weapon_data['piercing_damage'] or 0) +
+                 (weapon_data['crushing_damage'] or 0) +
+                 (weapon_data['dark_damage'] or 0))
+            
+            weapon_info = {
+                'name': weapon_data['name'],
+                'itemid': weapon_id,
+                'bar_id': recipe['bar_id'],
+                'bar_name': bar_data['name'],
+                'required_qty': recipe['bar_amount'],
+                'smithing_level': recipe['smithing_level'],
+                'description': weapon_data['description'],
+                'rarity': weapon_data['rarity'],
+                'total_damage': total_damage,
+                'slashing': weapon_data['slashing_damage'] or 0,
+                'piercing': weapon_data['piercing_damage'] or 0,
+                'crushing': weapon_data['crushing_damage'] or 0,
+                'dark': weapon_data['dark_damage'] or 0
+            }
+            available_weapons.append(weapon_info)
+        
+        return available_weapons
+
+    @component_callback(re.compile(r"^smith_craft_weapon_\d+$"))
+    async def smith_craft_weapon_handler(self, ctx: ComponentContext):
+        """Handle the weapon crafting process."""
+        try:
+            # Get player ID from the button's custom_id
+            player_id = int(ctx.custom_id.split("_")[3])
+            logging.info(f"Smith craft weapon handler called for player_id: {player_id}")
+            
+            # Verify this player is the one who clicked
+            authorized_discord_id = await self.db.fetchval("""
+                SELECT discord_id::text FROM players 
+                WHERE playerid = $1
+            """, player_id)
+            
+            if str(ctx.author.id) != authorized_discord_id:
+                await ctx.send("You are not authorized to use this button.", ephemeral=True)
+                return
+
+            # Get available weapons based on inventory and level
+            available_weapons = await self.get_available_weapons(player_id)
+            logging.info(f"Available weapons for player {player_id}: {available_weapons}")
+
+            if not available_weapons:
+                await ctx.send("You don't have enough materials or smithing level to craft any weapons.", ephemeral=True)
+                return
+
+            # Create dropdown options for available weapons
+            options = []
+            for weapon in available_weapons:
+                damage_str = f"S:{weapon['slashing']}/P:{weapon['piercing']}/C:{weapon['crushing']}"
+                if weapon['dark'] > 0:
+                    damage_str += f"/D:{weapon['dark']}"
+                option = StringSelectOption(
+                    label=f"{weapon['name']} (Total: {weapon['total_damage']})",
+                    value=str(weapon['itemid']),
+                    description=f"Req: {weapon['required_qty']}x {weapon['bar_name']} | Lvl: {weapon['smithing_level']} | {damage_str}"
+                )
+                options.append(option)
+                logging.info(f"Added dropdown option: {weapon['name']}")
+
+            # Create dropdown menu
+            dropdown = StringSelectMenu(
+                custom_id=f"select_weapon_{player_id}",
+                placeholder="Choose weapon to craft"
+            )
+            # Set options after creating the menu
+            dropdown.options = options[:25]  # Limit to 25 options
+
+            await ctx.send(
+                content="Select weapon to craft:",
+                components=[dropdown],
+                ephemeral=True
+            )
+
+        except Exception as e:
+            logging.error(f"Error in smith_craft_weapon_handler: {e}")
+            await ctx.send("An error occurred while accessing the smithy. Please try again.", ephemeral=True)
+
+    @component_callback(re.compile(r"^select_weapon_\d+$"))
+    async def select_weapon_handler(self, ctx: ComponentContext):
+        """Handle weapon selection and create it from bars."""
+        try:
+            # Get player ID from the dropdown's custom_id
+            player_id = int(ctx.custom_id.split("_")[2])
+            
+            # Verify this player is the one who clicked
+            authorized_discord_id = await self.db.fetchval("""
+                SELECT discord_id::text FROM players 
+                WHERE playerid = $1
+            """, player_id)
+            
+            if str(ctx.author.id) != authorized_discord_id:
+                await ctx.send("You are not authorized to use this dropdown.", ephemeral=True)
+                return
+
+            selected_weapon_id = int(ctx.values[0])
+            
+            recipe = self.weapon_recipes.get(selected_weapon_id)
+            if not recipe:
+                await ctx.send("Invalid weapon selection.", ephemeral=True)
+                return
+
+            # Check smithing level
+            player_level = await self.get_smithing_level(player_id)
+            if player_level < recipe['smithing_level']:
+                await ctx.send(f"You need smithing level {recipe['smithing_level']} to craft this weapon. You are level {player_level}.", ephemeral=True)
+                return
+
+            bar_id, required_qty = recipe['bar_id'], recipe['bar_amount']
+            
+            # Verify materials again
+            if not await self.check_materials(player_id, bar_id, required_qty):
+                await ctx.send("You no longer have enough materials.", ephemeral=True)
+                return
+
+            # Remove bars from inventory
+            await self.db.execute("""
+                UPDATE inventory
+                SET quantity = quantity - $1
+                WHERE playerid = $2 AND itemid = $3
+            """, required_qty, player_id, bar_id)
+
+            # Add the weapon to inventory
+            await self.db.execute("""
+                INSERT INTO inventory (playerid, itemid, quantity)
+                VALUES ($1, $2, 1)
+                ON CONFLICT (playerid, itemid)
+                DO UPDATE SET quantity = inventory.quantity + 1
+            """, player_id, selected_weapon_id)
+
+            # Get names for message
+            weapon_name = await self.get_item_name(selected_weapon_id)
+            bar_name = await self.get_item_name(bar_id)
+
+            await ctx.send(
+                f"Successfully crafted {weapon_name}! (Used: {required_qty}x {bar_name})",
+                ephemeral=True
+            )
+
+            # Clean up inventory (remove items with quantity 0)
+            await self.db.execute("""
+                DELETE FROM inventory
+                WHERE quantity <= 0
+            """)
+
+        except Exception as e:
+            logging.error(f"Error in select_weapon_handler: {e}")
+            await ctx.send("An error occurred while crafting the weapon. Please try again.", ephemeral=True)
 
 # Setup function to load this as an extension
 def setup(bot):
