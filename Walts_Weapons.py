@@ -158,13 +158,26 @@ class WaltsWeapons(Extension):
                         WHERE playerid = $2
                     """, item['price'], player_id)
                     
-                    # Add to inventory
-                    await connection.execute("""
-                        INSERT INTO inventory (playerid, itemid, quantity, isequipped)
-                        VALUES ($1, $2, 1, false)
-                        ON CONFLICT (playerid, itemid) 
-                        DO UPDATE SET quantity = inventory.quantity + 1
+                    # Check for existing item in main inventory (not bank, not equipped)
+                    existing_item = await connection.fetchrow("""
+                        SELECT inventoryid, quantity FROM inventory 
+                        WHERE playerid = $1 AND itemid = $2 
+                        AND isequipped = FALSE 
+                        AND (in_bank = FALSE OR in_bank IS NULL)
                     """, player_id, item_id)
+                    
+                    if existing_item:
+                        # Update existing stack
+                        await connection.execute("""
+                            UPDATE inventory SET quantity = quantity + 1
+                            WHERE inventoryid = $1
+                        """, existing_item['inventoryid'])
+                    else:
+                        # Insert new item
+                        await connection.execute("""
+                            INSERT INTO inventory (playerid, itemid, quantity, isequipped, in_bank)
+                            VALUES ($1, $2, 1, false, false)
+                        """, player_id, item_id)
             
             await ctx.send(f"You successfully bought {item['name']} for {item['price']} gold!", ephemeral=True)
             

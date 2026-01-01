@@ -1,12 +1,10 @@
 import re
-from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command, SlashContext, component_callback, ComponentContext
+from interactions import ButtonStyle, Embed, Button, Client, Extension, slash_command, SlashContext, component_callback, ComponentContext, ActionRow
 from functools import partial
 import logging
 import math
 import json
 from inventory_systems import InventorySystem  # Import the InventorySystem
-from interactions import ButtonStyle, Embed, Button, Extension, slash_command, ComponentContext
-import re
 import random
 #from Shop_Manager import ShopManager
 
@@ -18,6 +16,22 @@ class playerinterface(Extension):
     async def send_player_ui(self, ctx, location_name, health, mana, stamina, current_location_id, gold_balance):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
+        
+        # Check if player is in combat - get the most recent active battle
+        battle_instance = await db.fetchrow("""
+            SELECT bi.instance_id 
+            FROM battle_instances bi
+            JOIN battle_participants bp ON bi.instance_id = bp.instance_id
+            WHERE bp.player_id = $1 
+            AND bi.is_active = true
+            ORDER BY bi.created_at DESC
+            LIMIT 1
+        """, player_id)
+        
+        if battle_instance:
+            # Player is in combat - show combat UI
+            await self.send_combat_ui(ctx, player_id, battle_instance['instance_id'])
+            return
     
         current_inventory_count = await db.get_current_inventory_count(player_id)
         max_inventory_capacity = await db.get_inventory_capacity(player_id)
@@ -77,6 +91,113 @@ class playerinterface(Extension):
 
         # Send the embed with the buttons arranged in rows
         await ctx.send(embeds=[embed], components=button_rows, ephemeral=False)
+    
+    async def send_combat_ui(self, ctx, player_id, instance_id):
+        """Display combat UI when player is in battle."""
+        battle_system = self.bot.get_ext("Battle_System")
+        if not battle_system:
+            await ctx.send("Error: Battle system not found.", ephemeral=True)
+            return
+        
+        # Get battle state
+        battle_state = await battle_system.get_instance_state(instance_id)
+        if not battle_state:
+            await ctx.send("Error: Could not retrieve battle state.", ephemeral=True)
+            return
+        
+        # Get location information
+        location_data = await self.bot.db.fetchrow("""
+            SELECT l.name, l.locationid
+            FROM player_data pd
+            JOIN locations l ON l.locationid = pd.current_location
+            WHERE pd.playerid = $1
+        """, player_id)
+        location_name = location_data['name'] if location_data else "Unknown Location"
+        
+        # Get current turn player - for solo battles, always allow actions
+        current_turn_player = await battle_system.get_current_turn_player(instance_id)
+        # For solo battles or if no turn system, allow player to act
+        is_solo = battle_state.get('instance_type') == 'solo'
+        is_my_turn = is_solo or (current_turn_player == player_id) or (current_turn_player is None)
+        
+        # Get player's participant data
+        participant = next((p for p in battle_state['participants'] if p['player_id'] == player_id), None)
+        if not participant:
+            await ctx.send("Error: You are not a participant in this battle.", ephemeral=True)
+            return
+        
+        # Create combat embed
+        embed = Embed(
+            title="⚔️ Battle in Progress",
+            description=f"You are currently in combat at **{location_name}**!" + (" **It's your turn!**" if is_my_turn else " Waiting for your turn..."),
+            color=0xFF0000
+        )
+        
+        # Add all party members' status
+        for p in battle_state['participants']:
+            try:
+                p_discord_id = await self.bot.db.fetchval("""
+                    SELECT discord_id FROM players WHERE playerid = $1
+                """, p['player_id'])
+                if p_discord_id:
+                    p_user = await self.bot.fetch_user(p_discord_id)
+                    p_name = p_user.display_name if p_user else f"Player {p['player_id']}"
+                else:
+                    p_name = f"Player {p['player_id']}"
+            except:
+                p_name = f"Player {p['player_id']}"
+            
+            is_current_turn = " 👈" if p['player_id'] == current_turn_player else ""
+            status_icon = "💀" if p['current_health'] <= 0 else "❤️"
+            is_me = " (You)" if p['player_id'] == player_id else ""
+            embed.add_field(
+                name=f"{p_name}{is_me}{is_current_turn}",
+                value=f"{status_icon} Health: {p['current_health']}\n✨ Mana: {p['current_mana']}",
+                inline=True
+            )
+        
+        # Add all enemies' status
+        for battle_enemy in battle_state['enemies']:
+            if battle_enemy['current_health'] > 0:
+                enemy_data = await self.bot.db.fetchrow("""
+                    SELECT * FROM enemies WHERE enemyid = $1
+                """, battle_enemy['enemy_id'])
+                if enemy_data:
+                    status_icon = "💀" if battle_enemy['current_health'] <= 0 else "👹"
+                    embed.add_field(
+                        name=f"{enemy_data['name']}",
+                        value=f"{status_icon} Health: {battle_enemy['current_health']}",
+                        inline=True
+                    )
+        
+        # Create action buttons - always show if player is alive, but indicate if it's not their turn
+        buttons = None
+        if participant['current_health'] > 0:
+            buttons = ActionRow(
+                Button(
+                    style=ButtonStyle.PRIMARY,
+                    label="Attack",
+                    custom_id=f"attack_select_{player_id}",
+                    disabled=not is_my_turn
+                ),
+                Button(
+                    style=ButtonStyle.SECONDARY,
+                    label="Use Ability",
+                    custom_id=f"ability_select_{player_id}",
+                    disabled=not is_my_turn
+                ),
+                Button(
+                    style=ButtonStyle.DANGER,
+                    label="Flee Battle",
+                    custom_id=f"flee_{player_id}"
+                )
+            )
+        
+        # Send combat UI
+        if buttons:
+            await ctx.send(embeds=[embed], components=[buttons], ephemeral=False)
+        else:
+            await ctx.send(embeds=[embed], ephemeral=False)
 
 
 
@@ -226,12 +347,7 @@ class playerinterface(Extension):
         db = self.bot.db
         player_id = await db.get_or_create_player(ctx.author.id)
 
-        # Check if player is in combat by accessing battle_system through extensions
-        battle_system = self.bot.get_ext("Battle_System")
-        if battle_system and player_id in battle_system.active_battles:
-            await ctx.send("You cannot use this command while in combat! Use the flee button if you want to escape.", ephemeral=True)
-            return
-
+        # Get player data - send_player_ui will check for combat and show appropriate UI
         player_data = await db.fetchrow("""
             SELECT pd.health, pd.mana, pd.stamina, l.name, pd.current_location, pd.gold_balance
             FROM player_data pd

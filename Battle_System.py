@@ -9,7 +9,41 @@ class BattleSystem(Extension):
     def __init__(self, bot):
         self.bot = bot
         self.db = bot.db
-        self.active_battles = {}  # Will be deprecated in favor of database storage
+
+    async def get_equipped_weapon_damage(self, player_id):
+        """
+        Get total weapon damage from equipped weapons (excluding tools in tool belt).
+        Only counts weapons in combat slots (1H_weapon, 2H_weapon, left_hand), not tool belt slots.
+        Returns a dict with slashing, piercing, crushing, and dark damage.
+        """
+        weapons = await self.db.fetch("""
+            SELECT 
+                COALESCE(i.slashing_damage, 0) as slashing_damage,
+                COALESCE(i.piercing_damage, 0) as piercing_damage,
+                COALESCE(i.crushing_damage, 0) as crushing_damage,
+                COALESCE(i.dark_damage, 0) as dark_damage
+            FROM inventory inv
+            JOIN items i ON inv.itemid = i.itemid
+            WHERE inv.playerid = $1 
+            AND inv.isequipped = true
+            AND inv.slot IN ('1H_weapon', '2H_weapon', 'left_hand')
+            AND i.type = 'Weapon'
+        """, player_id)
+        
+        total_damage = {
+            'slashing': 0,
+            'piercing': 0,
+            'crushing': 0,
+            'dark': 0
+        }
+        
+        for weapon in weapons:
+            total_damage['slashing'] += weapon['slashing_damage'] or 0
+            total_damage['piercing'] += weapon['piercing_damage'] or 0
+            total_damage['crushing'] += weapon['crushing_damage'] or 0
+            total_damage['dark'] += weapon['dark_damage'] or 0
+        
+        return total_damage
 
     @staticmethod
     def roll_dice(sides=20):
@@ -170,15 +204,11 @@ class BattleSystem(Extension):
             first_turn_player = player_id
             await self.db.execute("""
                 UPDATE battle_instances
-                SET current_turn_player_id = $1, turn_order = ARRAY[$1]
+                SET current_turn_player_id = $1, turn_order = ARRAY[$1::INTEGER]
                 WHERE instance_id = $2
             """, player_id, instance_id)
 
-        # Store instance ID in active_battles
-        self.active_battles[player_id] = {
-            'instance_id': instance_id,
-            'enemy': enemies[0]  # Store first enemy for reference
-        }
+        # Instance ID is stored in database, no need for active_battles
 
         # Create battle announcement embed for channel
         if not is_solo:
@@ -677,6 +707,9 @@ class BattleSystem(Extension):
         player_user = await self.bot.fetch_user(player_discord_id) if player_discord_id else None
         player_name = player_user.display_name if player_user else f"Player {player_id}"
         
+        damage_dealt = 0
+        new_enemy_health = target_battle_enemy['current_health']
+        
         if is_blocked:
             message = f"🛡️ {player_name}'s attack on {target_enemy['name']} was blocked!"
             if battle_state['instance_type'] == 'party':
@@ -688,8 +721,15 @@ class BattleSystem(Extension):
                 await self.send_battle_message(instance_id, message)
             await ctx.send(f"You missed your attack on {target_enemy['name']}!", ephemeral=True)
         else:
-            # Calculate damage
-            base_damage = player_stats['total_strength']
+            # Calculate damage - include weapon damage (excluding tools)
+            weapon_damage = await self.get_equipped_weapon_damage(player_id)
+            total_weapon_damage = (
+                weapon_damage['slashing'] + 
+                weapon_damage['piercing'] + 
+                weapon_damage['crushing'] + 
+                weapon_damage['dark']
+            )
+            base_damage = player_stats['total_strength'] + total_weapon_damage
             damage_dealt = await self.calculate_damage(
                 player_stats, target_enemy,
                 'physical', base_damage, is_critical
@@ -697,6 +737,7 @@ class BattleSystem(Extension):
 
             # Update enemy's health in the battle instance
             new_health = target_battle_enemy['current_health'] - damage_dealt
+            new_enemy_health = new_health
             await self.update_battle_health(
                 instance_id, 'enemy', target_battle_enemy['battle_enemy_id'], new_health
             )
@@ -727,24 +768,29 @@ class BattleSystem(Extension):
                                 f"(Remaining health: {new_health})"
                             )
 
+        # Check if enemy is dead
+        enemy_dead = new_enemy_health <= 0
+        
         # Enemy's turn - in party battles, enemies attack random participants
         player_survived = True
-        if battle_state['instance_type'] == 'party':
-            for battle_enemy in battle_state['enemies']:
-                if battle_enemy['current_health'] > 0:
-                    # Select random target from participants
-                    target_participant = random.choice(battle_state['participants'])
-                    survived = await self.enemy_attack(
-                        ctx, 
-                        target_participant['player_id'], 
-                        await self.db.fetchrow("""
-                            SELECT * FROM enemies WHERE enemyid = $1
-                        """, battle_enemy['enemy_id']),
-                        instance_id
-                    )
-                    player_survived = player_survived and survived
-        else:
-            player_survived = await self.enemy_attack(ctx, player_id, target_enemy, instance_id)
+        if not enemy_dead:  # Only have enemies attack if they're still alive
+            if battle_state['instance_type'] == 'party':
+                for battle_enemy in battle_state['enemies']:
+                    if battle_enemy['current_health'] > 0:
+                        # Select random target from participants
+                        target_participant = random.choice(battle_state['participants'])
+                        survived = await self.enemy_attack(
+                            ctx, 
+                            target_participant['player_id'], 
+                            await self.db.fetchrow("""
+                                SELECT * FROM enemies WHERE enemyid = $1
+                            """, battle_enemy['enemy_id']),
+                            instance_id
+                        )
+                        player_survived = player_survived and survived
+            else:
+                # Solo battle - enemy attacks player
+                player_survived = await self.enemy_attack(ctx, player_id, target_enemy, instance_id)
 
         # Advance turn for party battles
         if battle_state['instance_type'] == 'party':
@@ -763,10 +809,26 @@ class BattleSystem(Extension):
                 # Prompt next player
                 await self.prompt_next_player_turn(instance_id, next_player, channel)
         else:
-            # Solo battle - refresh status
+            # Solo battle - prompt player again after enemy turn
             if player_survived:
+                # Check if battle is still active (enemy might be dead)
                 battle_state = await self.get_instance_state(instance_id)
-                await self.refresh_battle_status(ctx, battle_state, player_id)
+                if battle_state:
+                    # Check if any enemies are still alive
+                    living_enemies = [be for be in battle_state['enemies'] if be['current_health'] > 0]
+                    if living_enemies:
+                        # Get channel from battle instance
+                        channel_id = await self.db.fetchval("""
+                            SELECT channel_id FROM battle_instances WHERE instance_id = $1
+                        """, instance_id)
+                        channel = None
+                        if channel_id:
+                            try:
+                                channel = await self.bot.fetch_channel(channel_id)
+                            except:
+                                pass
+                        # Prompt player for next turn
+                        await self.prompt_next_player_turn(instance_id, player_id, channel)
 
         # Check combat end
         await self.handle_combat_end(ctx, player_id, target_enemy)
@@ -792,30 +854,9 @@ class BattleSystem(Extension):
             await ctx.send("Error: Could not retrieve current stats.", ephemeral=True)
             return False
         
-        # Get battle data and process enemy effects
-        battle_data = self.active_battles.get(player_id)
-        if battle_data and 'enemy_effects' in battle_data:
-            current_time = datetime.now()
-            active_effects = []
-            additional_damage = 0
-            
-            # Process each effect
-            for effect in battle_data['enemy_effects']:
-                effect_duration = (current_time - effect['start_time']).total_seconds()
-                if effect_duration <= effect['duration']:
-                    active_effects.append(effect)
-                    # Handle damage over time effects
-                    if effect['type'].startswith('dot_'):
-                        additional_damage += effect['value']
-                        await ctx.send(f"{enemy['name']} takes {effect['value']} damage from {effect['type']}!", ephemeral=True)
-            
-            # Update active effects list
-            battle_data['enemy_effects'] = active_effects
-            
-            # Apply damage from effects
-            if additional_damage > 0:
-                battle_data['enemy_health'] -= additional_damage
-                await ctx.send(f"{enemy['name']} took {additional_damage} total damage from effects! Remaining health: {battle_data['enemy_health']}", ephemeral=True)
+        # Get battle instance for enemy effects (if needed in the future)
+        # For now, enemy effects are handled through the battle_effects table
+        # This section can be expanded later if needed
         
         # Calculate attack roll results for enemy
         hit_success, is_critical, is_blocked = await self.calculate_attack_roll(
@@ -911,11 +952,11 @@ class BattleSystem(Extension):
 
     async def handle_combat_end(self, ctx: SlashContext, player_id: int, enemy):
         """Handles the ending of combat when either the player or enemy reaches zero health."""
-        if player_id not in self.active_battles:
+        # Get battle instance from database
+        instance_id = await self.get_player_battle_instance(player_id)
+        if not instance_id:
             return  # If no active battle, stop further processing
 
-        battle_data = self.active_battles[player_id]
-        instance_id = battle_data['instance_id']
         battle_state = await self.get_instance_state(instance_id)
 
         if not battle_state:
@@ -941,10 +982,7 @@ class BattleSystem(Extension):
             await ctx.send("Both sides have fallen! The battle ends in a draw!", ephemeral=True)
             await self.end_battle_instance(instance_id)
             
-            # Clean up active battles for all participants
-            for participant in battle_state['participants']:
-                if participant['player_id'] in self.active_battles:
-                    del self.active_battles[participant['player_id']]
+            # Battle ended - cleanup handled by end_battle_instance
             return
 
         if all_enemies_defeated:
@@ -980,9 +1018,6 @@ class BattleSystem(Extension):
 
             # Clean up
             await self.end_battle_instance(instance_id)
-            for participant in battle_state['participants']:
-                if participant['player_id'] in self.active_battles:
-                    del self.active_battles[participant['player_id']]
             return
 
         if all_players_defeated:
@@ -1001,9 +1036,6 @@ class BattleSystem(Extension):
 
             # Clean up
             await self.end_battle_instance(instance_id)
-            for participant in battle_state['participants']:
-                if participant['player_id'] in self.active_battles:
-                    del self.active_battles[participant['player_id']]
             return
 
         # Turn system now handles prompting next player automatically
@@ -2061,6 +2093,12 @@ class BattleSystem(Extension):
         _, player_id = ctx.custom_id.split("_")
         player_id = int(player_id)
 
+        # Get battle instance from database
+        instance_id = await self.get_player_battle_instance(player_id)
+        if not instance_id:
+            await ctx.send("No active battle found.", ephemeral=True)
+            return
+
         # Fetch player stats from the view
         player_stats = await self.db.fetchrow("""
             SELECT * FROM player_stats_view WHERE playerid = $1
@@ -2071,14 +2109,6 @@ class BattleSystem(Extension):
             return
 
         player_stats = dict(player_stats)
-
-        if player_id not in self.active_battles:
-            await ctx.send("No active battle found.", ephemeral=True)
-            return
-
-        # Get the current battle data
-        battle_data = self.active_battles[player_id]
-        instance_id = battle_data['instance_id']
 
         # Get battle state
         battle_state = await self.get_instance_state(instance_id)
@@ -2256,24 +2286,15 @@ class BattleSystem(Extension):
                     # No one left in battle - end it
                     await self.send_battle_message(instance_id, "💀 All party members have fled or been defeated! Battle ended.")
                     await self.end_battle_instance(instance_id)
-                    # Clean up active battles for all participants
-                    all_participants = await self.db.fetch("""
-                        SELECT player_id FROM battle_participants WHERE instance_id = $1
-                    """, instance_id)
-                    for p in all_participants:
-                        if p['player_id'] in self.active_battles:
-                            del self.active_battles[p['player_id']]
-                
-                # Clean up active battles for this player
-                if player_id in self.active_battles:
-                    del self.active_battles[player_id]
                 
                 await ctx.send("You successfully escaped from battle and have been removed from the party!", ephemeral=True)
             else:
-                # Solo battle - end the instance
+                # Solo battle - remove player from participants and end the instance
+                await self.db.execute("""
+                    DELETE FROM battle_participants
+                    WHERE instance_id = $1 AND player_id = $2
+                """, instance_id, player_id)
                 await self.end_battle_instance(instance_id)
-                if player_id in self.active_battles:
-                    del self.active_battles[player_id]
                 await ctx.send("You successfully escaped from battle!", ephemeral=True)
             return
         else:
