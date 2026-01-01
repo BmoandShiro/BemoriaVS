@@ -20,36 +20,34 @@ class InventorySystem(Extension):
 
         is_at_bank = player_data and player_data['location_type'].lower() == "bank"
 
+        # Only show unequipped items in main inventory
         inventory_items = await self.db.fetch("""
             SELECT inv.inventoryid, inv.quantity, inv.isequipped, 
                    COALESCE(i.name, cf.fish_name) AS item_name, cf.length, cf.weight, cf.rarity
             FROM inventory inv
             LEFT JOIN items i ON inv.itemid = i.itemid
             LEFT JOIN caught_fish cf ON inv.caught_fish_id = cf.id
-            WHERE inv.playerid = $1 AND inv.in_bank = FALSE
+            WHERE inv.playerid = $1 AND inv.in_bank = FALSE AND inv.isequipped = FALSE
         """, player_id)
 
         if not inventory_items:
-            return await ctx.send("Inventory is empty.", ephemeral=True)
+            inventory_view = "Inventory is empty (no unequipped items)."
+        else:
+            # Build detailed inventory display (only unequipped items)
+            inventory_view = ""
+            for item in inventory_items:
+                if item['item_name']:
+                    if item['length'] and item['weight']:
+                        inventory_view += f"{item['item_name']} (Rarity: {item['rarity']}, Length: {item['length']} cm, Weight: {item['weight']} kg)\n"
+                    else:
+                        inventory_view += f"{item['item_name']} (x{item['quantity']})\n"
 
-        # Build detailed inventory display
-        inventory_view = ""
-        for item in inventory_items:
-            if item['item_name']:
-                if item['length'] and item['weight']:
-                    inventory_view += f"{item['item_name']} (Rarity: {item['rarity']}, Length: {item['length']} cm, Weight: {item['weight']} kg)\n"
-                else:
-                    inventory_view += f"{item['item_name']} (x{item['quantity']})"
-                if item['isequipped']:
-                    inventory_view += " - Equipped"
-                inventory_view += "\n"
-
-        # Adding equip, unequip, drop, and transfer buttons
+        # Adding equip, drop, and view equipped buttons
         equip_button = Button(style=ButtonStyle.SUCCESS, label="Equip Item", custom_id="equip_item")
-        unequip_button = Button(style=ButtonStyle.DANGER, label="Unequip Item", custom_id="unequip_item")
+        view_equipped_button = Button(style=ButtonStyle.PRIMARY, label="View Equipped", custom_id="view_equipped")
         drop_button = Button(style=ButtonStyle.DANGER, label="Drop Item", custom_id="drop_item")
 
-        components = [[equip_button, unequip_button, drop_button]]
+        components = [[equip_button, view_equipped_button, drop_button]]
 
         # Add transfer buttons if the player is at a bank
         if is_at_bank:
@@ -267,6 +265,59 @@ class InventorySystem(Extension):
         inventory = self.get_inventory_for_player(player_id)
         result = await inventory.unequip_item(item_id)
         await ctx.send(result, ephemeral=True)
+
+    @component_callback("view_equipped")
+    async def view_equipped_handler(self, ctx: ComponentContext):
+        """Display all equipped items in a separate menu."""
+        player_id = await self.db.get_or_create_player(ctx.author.id)
+        
+        # Fetch all equipped items
+        equipped_items = await self.db.fetch("""
+            SELECT inv.inventoryid, inv.quantity, inv.slot,
+                   COALESCE(i.name, cf.fish_name) AS item_name, 
+                   i.type AS item_type,
+                   cf.length, cf.weight, cf.rarity
+            FROM inventory inv
+            LEFT JOIN items i ON inv.itemid = i.itemid
+            LEFT JOIN caught_fish cf ON inv.caught_fish_id = cf.id
+            WHERE inv.playerid = $1 AND inv.isequipped = TRUE
+            ORDER BY inv.slot
+        """, player_id)
+
+        if not equipped_items:
+            return await ctx.send("No items are currently equipped.", ephemeral=True)
+
+        # Build equipped items display organized by slot
+        equipped_view = "**Equipped Items:**\n\n"
+        
+        # Organize by slot type
+        slot_groups = {}
+        for item in equipped_items:
+            slot = item['slot'] or 'unknown'
+            
+            if slot not in slot_groups:
+                slot_groups[slot] = []
+            slot_groups[slot].append(item)
+        
+        # Display items grouped by slot
+        for slot, items in slot_groups.items():
+            slot_name = slot.replace('_', ' ').title() if slot != 'unknown' else 'Unknown Slot'
+            equipped_view += f"**{slot_name}:**\n"
+            for item in items:
+                if item['item_name']:
+                    if item['length'] and item['weight']:
+                        equipped_view += f"  • {item['item_name']} (Rarity: {item['rarity']}, Length: {item['length']} cm, Weight: {item['weight']} kg)\n"
+                    else:
+                        equipped_view += f"  • {item['item_name']}"
+                        if item['quantity'] > 1:
+                            equipped_view += f" (x{item['quantity']})"
+                        equipped_view += "\n"
+            equipped_view += "\n"
+
+        # Add unequip button
+        unequip_button = Button(style=ButtonStyle.DANGER, label="Unequip Item", custom_id="unequip_item")
+
+        await ctx.send(content=equipped_view, components=[[unequip_button]], ephemeral=True)
 
 # Setup function to load this as an extension
 def setup(bot):
