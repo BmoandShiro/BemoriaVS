@@ -2093,10 +2093,25 @@ class BattleSystem(Extension):
         _, player_id = ctx.custom_id.split("_")
         player_id = int(player_id)
 
+        # Verify player authorization - only the button owner can use it
+        player_data = await self.db.fetchrow("""
+            SELECT playerid FROM players WHERE discord_id = $1
+        """, ctx.author.id)
+        
+        if not player_data or player_data['playerid'] != player_id:
+            await ctx.send("You are not authorized to use this button.", ephemeral=True)
+            return
+
         # Get battle instance from database
         instance_id = await self.get_player_battle_instance(player_id)
         if not instance_id:
             await ctx.send("No active battle found.", ephemeral=True)
+            return
+        
+        # Check if it's this player's turn (for party battles)
+        current_turn_player = await self.get_current_turn_player(instance_id)
+        if current_turn_player and current_turn_player != player_id:
+            await ctx.send("⏳ It's not your turn! You can only flee during your turn.", ephemeral=True)
             return
 
         # Fetch player stats from the view
@@ -2159,6 +2174,41 @@ class BattleSystem(Extension):
             is_party = battle_state.get('instance_type') == 'party'
             
             if is_party:
+                # Check if it was this player's turn BEFORE removing them
+                current_turn = await self.get_current_turn_player(instance_id)
+                was_their_turn = (current_turn == player_id)
+                
+                # Get current turn order to find next player
+                turn_order = await self.db.fetchval("""
+                    SELECT turn_order FROM battle_instances WHERE instance_id = $1
+                """, instance_id)
+                
+                # Find the next player in the original turn order (before removing fleeing player)
+                next_player = None
+                if was_their_turn and turn_order and player_id in turn_order:
+                    try:
+                        current_index = turn_order.index(player_id)
+                        # Find next alive player after the fleeing player
+                        for i in range(1, len(turn_order)):
+                            next_index = (current_index + i) % len(turn_order)
+                            candidate_id = turn_order[next_index]
+                            
+                            # Skip the fleeing player if we wrap around
+                            if candidate_id == player_id:
+                                continue
+                            
+                            # Check if this player is still in battle and alive
+                            participant = await self.db.fetchrow("""
+                                SELECT current_health FROM battle_participants
+                                WHERE instance_id = $1 AND player_id = $2
+                            """, instance_id, candidate_id)
+                            
+                            if participant and participant['current_health'] > 0:
+                                next_player = candidate_id
+                                break
+                    except ValueError:
+                        pass
+                
                 # Remove player from battle participants
                 await self.db.execute("""
                     DELETE FROM battle_participants
@@ -2166,10 +2216,6 @@ class BattleSystem(Extension):
                 """, instance_id, player_id)
                 
                 # Remove player from turn order
-                turn_order = await self.db.fetchval("""
-                    SELECT turn_order FROM battle_instances WHERE instance_id = $1
-                """, instance_id)
-                
                 if turn_order and player_id in turn_order:
                     new_turn_order = [p for p in turn_order if p != player_id]
                     await self.db.execute("""
@@ -2178,29 +2224,10 @@ class BattleSystem(Extension):
                         WHERE instance_id = $2
                     """, new_turn_order, instance_id)
                     
-                    # If it was this player's turn, advance to next player
-                    current_turn = await self.get_current_turn_player(instance_id)
-                    if current_turn == player_id:
-                        # Update current turn player to None first, then advance
-                        await self.db.execute("""
-                            UPDATE battle_instances
-                            SET current_turn_player_id = NULL
-                            WHERE instance_id = $1
-                        """, instance_id)
-                        
-                        # Find next alive player in turn order
-                        next_player = None
-                        for p_id in new_turn_order:
-                            participant = await self.db.fetchrow("""
-                                SELECT current_health FROM battle_participants
-                                WHERE instance_id = $1 AND player_id = $2
-                            """, instance_id, p_id)
-                            if participant and participant['current_health'] > 0:
-                                next_player = p_id
-                                break
-                        
+                    # If it was this player's turn, set the next player
+                    if was_their_turn:
                         if next_player:
-                            # Set next player as current turn
+                            # Set the next player we found as current turn
                             await self.db.execute("""
                                 UPDATE battle_instances
                                 SET current_turn_player_id = $1
@@ -2219,6 +2246,33 @@ class BattleSystem(Extension):
                                     pass
                             if channel:
                                 await self.prompt_next_player_turn(instance_id, next_player, channel)
+                        else:
+                            # No next player found, try to get first alive player from new turn order
+                            for p_id in new_turn_order:
+                                participant = await self.db.fetchrow("""
+                                    SELECT current_health FROM battle_participants
+                                    WHERE instance_id = $1 AND player_id = $2
+                                """, instance_id, p_id)
+                                if participant and participant['current_health'] > 0:
+                                    await self.db.execute("""
+                                        UPDATE battle_instances
+                                        SET current_turn_player_id = $1
+                                        WHERE instance_id = $2
+                                    """, p_id, instance_id)
+                                    
+                                    # Get channel and prompt next player
+                                    channel_id = await self.db.fetchval("""
+                                        SELECT channel_id FROM battle_instances WHERE instance_id = $1
+                                    """, instance_id)
+                                    channel = None
+                                    if channel_id:
+                                        try:
+                                            channel = await self.bot.fetch_channel(channel_id)
+                                        except:
+                                            pass
+                                    if channel:
+                                        await self.prompt_next_player_turn(instance_id, p_id, channel)
+                                    break
                 
                 # Remove player from party
                 party = await self.db.fetchrow("""
