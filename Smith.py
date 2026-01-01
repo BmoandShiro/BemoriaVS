@@ -39,6 +39,15 @@ class SmithModule(Extension):
             14: {'bar_id': 231, 'bar_amount': 9},  # Steel Leggings - 9 bars
             15: {'bar_id': 231, 'bar_amount': 6},  # Steel Boots - 6 bars
         }
+        
+        # Define crafting requirements for tools
+        # Format: tool_itemid: (bar_itemid, quantity)
+        # Tool recipes will be loaded dynamically by name to avoid hardcoding item IDs
+        self.tool_recipe_definitions = {
+            # Tool name: (bar_itemid, bar_amount)
+            'Iron Hatchet': {'bar_id': 230, 'bar_amount': 3},  # 3 Iron Bars
+        }
+        self.tool_recipes = {}  # Will be populated with item IDs
 
     async def get_player_id(self, discord_id):
         """Fetch the player ID using the Discord ID."""
@@ -163,6 +172,78 @@ class SmithModule(Extension):
         
         return available_armor
 
+    async def get_available_tools(self, player_id: int) -> List[Dict]:
+        """Get list of tools that can be crafted based on player's inventory."""
+        available_tools = []
+        
+        # First, check what bars the player has
+        bars = await self.db.fetch("""
+            SELECT i.itemid, i.quantity, items.name, items.description, items.type, items.rarity
+            FROM inventory i 
+            JOIN items ON i.itemid = items.itemid 
+            WHERE i.playerid = $1 
+            AND i.in_bank = FALSE
+            AND items.type = 'bar'
+            AND i.quantity > 0
+        """, player_id)
+        
+        if not bars:
+            logging.info(f"Player {player_id} has no bars in inventory for tool crafting")
+            return []
+        
+        # Create a dict of bar quantities for easy lookup
+        bar_quantities = {bar['itemid']: bar['quantity'] for bar in bars}
+        
+        # Load tool recipes by looking up item IDs by name
+        if not self.tool_recipes:
+            for tool_name, recipe in self.tool_recipe_definitions.items():
+                tool_id = await self.db.fetchval("""
+                    SELECT itemid FROM items WHERE LOWER(name) = LOWER($1)
+                """, tool_name)
+                if tool_id:
+                    self.tool_recipes[tool_id] = recipe
+                    logging.info(f"Loaded tool recipe: {tool_name} (ID: {tool_id}) requires {recipe['bar_amount']}x bar_id {recipe['bar_id']}")
+        
+        # For each tool recipe, check if we have enough materials
+        for tool_id, recipe in self.tool_recipes.items():
+            available_qty = bar_quantities.get(recipe['bar_id'], 0)
+            has_materials = available_qty >= recipe['bar_amount']
+            
+            if not has_materials:
+                continue
+            
+            # Get tool data
+            tool_data = await self.db.fetchrow("""
+                SELECT itemid, name, description, type, rarity
+                FROM items 
+                WHERE itemid = $1
+            """, tool_id)
+            
+            if not tool_data:
+                continue
+            
+            # Get bar data
+            bar_data = await self.db.fetchrow("""
+                SELECT name FROM items 
+                WHERE itemid = $1 AND type = 'bar'
+            """, recipe['bar_id'])
+            
+            if not bar_data:
+                continue
+            
+            tool_info = {
+                'name': tool_data['name'],
+                'itemid': tool_id,
+                'bar_id': recipe['bar_id'],
+                'bar_name': bar_data['name'],
+                'required_qty': recipe['bar_amount'],
+                'description': tool_data['description'],
+                'rarity': tool_data['rarity']
+            }
+            available_tools.append(tool_info)
+        
+        return available_tools
+
     @component_callback(re.compile(r"^smith_\d+$"))
     async def smith_button_handler(self, ctx: ComponentContext):
         """Handle the smith button click."""
@@ -184,16 +265,22 @@ class SmithModule(Extension):
             await ctx.send("An error occurred. Please try again.", ephemeral=True)
 
     async def display_smith_interface(self, ctx, player_id):
-        """Display the smithing interface with armor selection."""
-        smith_button = Button(
+        """Display the smithing interface with armor and tool selection."""
+        craft_armor_button = Button(
             style=ButtonStyle.PRIMARY,
             label="Craft Armor",
             custom_id=f"smith_craft_{player_id}"  # Using player_id from database
         )
+        
+        craft_tool_button = Button(
+            style=ButtonStyle.PRIMARY,
+            label="Craft Tool",
+            custom_id=f"smith_craft_tool_{player_id}"
+        )
 
         await ctx.send(
-            content="Welcome to the smithy! Click to see available armor to craft:",
-            components=[[smith_button]],
+            content="Welcome to the smithy! Choose what to craft:",
+            components=[[craft_armor_button, craft_tool_button]],
             ephemeral=True
         )
 
@@ -316,6 +403,126 @@ class SmithModule(Extension):
         except Exception as e:
             logging.error(f"Error in select_armor_handler: {e}")
             await ctx.send("An error occurred while crafting the armor. Please try again.", ephemeral=True)
+
+    @component_callback(re.compile(r"^smith_craft_tool_\d+$"))
+    async def smith_craft_tool_handler(self, ctx: ComponentContext):
+        """Handle the tool crafting process."""
+        try:
+            # Get player ID from the button's custom_id
+            player_id = int(ctx.custom_id.split("_")[3])
+            logging.info(f"Smith craft tool handler called for player_id: {player_id}")
+            
+            # Verify this player is the one who clicked
+            authorized_discord_id = await self.db.fetchval("""
+                SELECT discord_id::text FROM players 
+                WHERE playerid = $1
+            """, player_id)
+            
+            if str(ctx.author.id) != authorized_discord_id:
+                await ctx.send("You are not authorized to use this button.", ephemeral=True)
+                return
+
+            # Get available tools based on inventory
+            available_tools = await self.get_available_tools(player_id)
+            logging.info(f"Available tools for player {player_id}: {available_tools}")
+
+            if not available_tools:
+                await ctx.send("You don't have enough materials to craft any tools.", ephemeral=True)
+                return
+
+            # Create dropdown options for available tools
+            options = []
+            for tool in available_tools:
+                option = StringSelectOption(
+                    label=f"{tool['name']}",
+                    value=str(tool['itemid']),
+                    description=f"Requires: {tool['required_qty']}x {tool['bar_name']} | {tool['rarity']}"
+                )
+                options.append(option)
+                logging.info(f"Added dropdown option: {tool['name']}")
+
+            # Create dropdown menu
+            dropdown = StringSelectMenu(
+                custom_id=f"select_tool_{player_id}",
+                placeholder="Choose tool to craft"
+            )
+            # Set options after creating the menu
+            dropdown.options = options[:25]  # Limit to 25 options
+
+            await ctx.send(
+                content="Select tool to craft:",
+                components=[dropdown],
+                ephemeral=True
+            )
+
+        except Exception as e:
+            logging.error(f"Error in smith_craft_tool_handler: {e}")
+            await ctx.send("An error occurred while accessing the smithy. Please try again.", ephemeral=True)
+
+    @component_callback(re.compile(r"^select_tool_\d+$"))
+    async def select_tool_handler(self, ctx: ComponentContext):
+        """Handle tool selection and create it from bars."""
+        try:
+            # Get player ID from the dropdown's custom_id
+            player_id = int(ctx.custom_id.split("_")[2])
+            
+            # Verify this player is the one who clicked
+            authorized_discord_id = await self.db.fetchval("""
+                SELECT discord_id::text FROM players 
+                WHERE playerid = $1
+            """, player_id)
+            
+            if str(ctx.author.id) != authorized_discord_id:
+                await ctx.send("You are not authorized to use this dropdown.", ephemeral=True)
+                return
+
+            selected_tool_id = int(ctx.values[0])
+            
+            recipe = self.tool_recipes.get(selected_tool_id)
+            if not recipe:
+                await ctx.send("Invalid tool selection.", ephemeral=True)
+                return
+
+            bar_id, required_qty = recipe['bar_id'], recipe['bar_amount']
+            
+            # Verify materials again
+            if not await self.check_materials(player_id, bar_id, required_qty):
+                await ctx.send("You no longer have enough materials.", ephemeral=True)
+                return
+
+            # Remove bars from inventory
+            await self.db.execute("""
+                UPDATE inventory
+                SET quantity = quantity - $1
+                WHERE playerid = $2 AND itemid = $3
+            """, required_qty, player_id, bar_id)
+
+            # Add the tool to inventory
+            await self.db.execute("""
+                INSERT INTO inventory (playerid, itemid, quantity)
+                VALUES ($1, $2, 1)
+                ON CONFLICT (playerid, itemid)
+                DO UPDATE SET quantity = inventory.quantity + 1
+            """, player_id, selected_tool_id)
+
+            # Get names for message
+            tool_name = await self.get_item_name(selected_tool_id)
+            bar_name = await self.get_item_name(bar_id)
+
+            await ctx.send(
+                f"Successfully crafted {tool_name}! (Used: {required_qty}x {bar_name})",
+                ephemeral=True
+            )
+
+            # Clean up inventory (remove items with quantity 0)
+            await self.db.execute("""
+                DELETE FROM inventory
+                WHERE quantity <= 0
+            """)
+
+        except Exception as e:
+            logging.error(f"Error in select_tool_handler: {e}")
+            await ctx.send("An error occurred while crafting the tool. Please try again.", ephemeral=True)
 
 # Setup function to load this as an extension
 def setup(bot):
