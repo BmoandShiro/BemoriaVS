@@ -1,5 +1,6 @@
 from Inventory import Inventory
 from interactions import Extension, component_callback, Button, ButtonStyle, ComponentContext, StringSelectMenu, StringSelectOption
+import re
 
 class InventorySystem(Extension):
     def __init__(self, bot):
@@ -255,8 +256,111 @@ class InventorySystem(Extension):
         item_id = int(ctx.values[0])
         player_id = await self.db.get_or_create_player(ctx.author.id)
         inventory = self.get_inventory_for_player(player_id)
+        
+        # Check if this is a hatchet/axe that needs slot selection
+        item_info = await self.db.fetchrow("SELECT name, type FROM items WHERE itemid = $1", item_id)
+        if item_info:
+            item_name_lower = item_info.get('name', '').lower()
+            is_hatchet_or_axe = ('hatchet' in item_name_lower or 'axe' in item_name_lower) and item_info['type'] == "Weapon"
+            
+            if is_hatchet_or_axe:
+                # Show slot selection menu for hatchets/axes
+                options = [
+                    StringSelectOption(
+                        label="Tool Belt Slot (for Woodcutting)",
+                        value=f"tool_{item_id}",
+                        description="Use as a tool for woodcutting"
+                    ),
+                    StringSelectOption(
+                        label="Right Hand (for Combat)",
+                        value=f"right_{item_id}",
+                        description="Equip in right hand for combat"
+                    ),
+                    StringSelectOption(
+                        label="Left Hand (for Combat)",
+                        value=f"left_{item_id}",
+                        description="Equip in left hand for combat"
+                    )
+                ]
+                
+                slot_select = StringSelectMenu(
+                    custom_id=f"select_hatchet_slot_{player_id}",
+                    placeholder="Choose where to equip this hatchet/axe"
+                )
+                slot_select.options = options
+                
+                await ctx.send(
+                    content=f"**{item_info['name']}** can be equipped in multiple ways. Choose where to equip it:",
+                    components=[[slot_select]],
+                    ephemeral=True
+                )
+                return
+        
+        # For other items, equip normally
         result = await inventory.equip_item(item_id)
         await ctx.send(result, ephemeral=True)
+    
+    @component_callback(re.compile(r"^select_hatchet_slot_\d+$"))
+    async def select_hatchet_slot_handler(self, ctx: ComponentContext):
+        """Handle hatchet/axe slot selection."""
+        try:
+            player_id = int(ctx.custom_id.split("_")[3])
+            
+            # Verify authorization
+            authorized_discord_id = await self.db.fetchval("""
+                SELECT discord_id::text FROM players WHERE playerid = $1
+            """, player_id)
+            
+            if str(ctx.author.id) != authorized_discord_id:
+                await ctx.send("You are not authorized to use this.", ephemeral=True)
+                return
+            
+            selected_value = ctx.values[0]
+            slot_type, item_id = selected_value.split("_", 1)
+            item_id = int(item_id)
+            
+            # Get inventory instance
+            inventory = self.get_inventory_for_player(player_id)
+            
+            # Determine the actual slot name
+            if slot_type == "tool":
+                # Find available tool belt slot
+                slot = await inventory.find_available_tool_belt_slot()
+                if not slot:
+                    await ctx.send("No available tool belt slots. Please unequip a tool first.", ephemeral=True)
+                    return
+            elif slot_type == "right":
+                # Check if right hand (1H_weapon) is available
+                # Also check if 2H weapon is blocking
+                if await inventory.is_slot_filled("2H_weapon"):
+                    await ctx.send("Cannot equip in right hand while a 2-handed weapon is equipped.", ephemeral=True)
+                    return
+                if await inventory.is_slot_filled("1H_weapon"):
+                    await ctx.send("Right hand is already occupied. Please unequip the item first.", ephemeral=True)
+                    return
+                slot = "1H_weapon"  # Using 1H_weapon as right hand
+            elif slot_type == "left":
+                # For left hand, check if 2H weapon is blocking
+                if await inventory.is_slot_filled("2H_weapon"):
+                    await ctx.send("Cannot equip in left hand while a 2-handed weapon is equipped.", ephemeral=True)
+                    return
+                # Check if left_hand slot exists and is available
+                if await inventory.is_slot_filled("left_hand"):
+                    await ctx.send("Left hand is already occupied. Please unequip the item first.", ephemeral=True)
+                    return
+                slot = "left_hand"
+            else:
+                await ctx.send("Invalid slot selection.", ephemeral=True)
+                return
+            
+            # Equip the item to the selected slot
+            result = await inventory.equip_item(item_id, slot)
+            await ctx.send(result, ephemeral=True)
+            
+        except Exception as e:
+            import logging
+            logging.error(f"Error in select_hatchet_slot_handler: {e}")
+            await ctx.send("An error occurred while equipping the item. Please try again.", ephemeral=True)
 
     @component_callback("select_unequip_item")
     async def select_unequip_item_handler(self, ctx: ComponentContext):

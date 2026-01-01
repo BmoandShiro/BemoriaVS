@@ -150,7 +150,12 @@ class Inventory:
         """, self.player_id)
         return tool_belt_slots or 12  # Default to 12 if not set
 
-    async def equip_item(self, item_id):
+    async def equip_item(self, item_id, slot=None):
+        """
+        Equip an item to a specific slot.
+        If slot is None, automatically determines the slot based on item type.
+        Returns a special string "SELECT_SLOT" if the item needs slot selection (hatchets/axes).
+        """
         item_info = await self.db.fetchrow("SELECT * FROM items WHERE itemid = $1", item_id)
         if not item_info:
             return "Item not found."
@@ -172,41 +177,71 @@ class Inventory:
                     WHERE inventoryid = $1
                 """, equipped_rod["inventoryid"])
 
-        slot = None
+        # If slot is provided, use it directly (for hatchets/axes with user selection)
+        if slot:
+            # Validate the slot is available
+            if await self.is_slot_filled(slot):
+                return f"Slot {slot} is already occupied."
+            
+            await self.db.execute("""
+                UPDATE inventory SET isequipped = true, slot = $1 WHERE playerid = $2 AND itemid = $3
+            """, slot, self.player_id, item_id)
+            
+            slot_display = slot.replace('_', ' ').title()
+            return f"{item_info['name']} equipped in {slot_display}."
+
+        # Auto-determine slot if not provided
+        determined_slot = None
         if item_info['type'] == "Helmet":
-            slot = "helmet"
+            determined_slot = "helmet"
         elif item_info['type'] == "Chest":
-            slot = "chest"
+            determined_slot = "chest"
         elif item_info['type'] == "Back":
-            slot = "back"
+            determined_slot = "back"
         elif item_info['type'] == "Legs":
-            slot = "legs"
+            determined_slot = "legs"
         elif item_info['type'] == "Feet":
-            slot = "feet"
+            determined_slot = "feet"
         elif item_info['type'] == "Neck":
-            slot = "neck"
+            determined_slot = "neck"
         elif item_info['type'] == "Finger":
             if not await self.is_slot_filled("finger1"):
-                slot = "finger1"
+                determined_slot = "finger1"
             elif not await self.is_slot_filled("finger2"):
-                slot = "finger2"
+                determined_slot = "finger2"
             else:
                 return "Both finger slots are occupied."
         elif item_info['type'] == "1H_weapon" and not await self.is_slot_filled("2H_weapon"):
-            slot = "1H_weapon"
-        elif item_info['type'] == "2H_weapon" and not await self.is_slot_filled("1H_weapon") and not await self.is_slot_filled("2H_weapon"):
-            slot = "2H_weapon"
+            determined_slot = "1H_weapon"
+        elif item_info['type'] == "2H_weapon" and not await self.is_slot_filled("1H_weapon") and not await self.is_slot_filled("left_hand") and not await self.is_slot_filled("2H_weapon"):
+            determined_slot = "2H_weapon"
         elif item_info['type'] == "Tool":
-            slot = await self.find_available_tool_belt_slot()
+            determined_slot = await self.find_available_tool_belt_slot()
+        elif item_info['type'] == "Weapon":
+            # Check if it's a hatchet/axe (can be equipped in multiple ways)
+            item_name_lower = item_info.get('name', '').lower()
+            if 'hatchet' in item_name_lower or 'axe' in item_name_lower:
+                # Return special indicator that slot selection is needed
+                return "SELECT_SLOT"
+            elif 'pickaxe' in item_name_lower:
+                # Pickaxes always go to tool belt
+                determined_slot = await self.find_available_tool_belt_slot()
+            else:
+                # Other weapons go to weapon slots
+                if not await self.is_slot_filled("1H_weapon") and not await self.is_slot_filled("2H_weapon"):
+                    determined_slot = "1H_weapon"  # Default to 1H weapon slot
+                else:
+                    return "Both weapon slots are occupied."
 
-        if not slot:
+        if not determined_slot:
             return f"No available slot for {item_info['name']}."
 
         await self.db.execute("""
             UPDATE inventory SET isequipped = true, slot = $1 WHERE playerid = $2 AND itemid = $3
-        """, slot, self.player_id, item_id)
+        """, determined_slot, self.player_id, item_id)
 
-        return f"{item_info['name']} equipped in {slot}."
+        slot_display = determined_slot.replace('_', ' ').title()
+        return f"{item_info['name']} equipped in {slot_display}."
 
     async def find_available_tool_belt_slot(self):
         tool_belt_slots = await self.get_tool_belt_capacity()
