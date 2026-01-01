@@ -2118,9 +2118,163 @@ class BattleSystem(Extension):
 
         # If no enemies beat the player's roll, escape is successful
         if not successful_enemies:
-            await ctx.send("You successfully escaped from battle!", ephemeral=True)
-            await self.end_battle_instance(instance_id)
-            del self.active_battles[player_id]
+            # Get player username for messages
+            player_discord_id = await self.db.fetchval("""
+                SELECT discord_id FROM players WHERE playerid = $1
+            """, player_id)
+            player_user = await self.bot.fetch_user(player_discord_id) if player_discord_id else None
+            player_name = player_user.display_name if player_user else f"Player {player_id}"
+            
+            # Check if this is a party battle
+            is_party = battle_state.get('instance_type') == 'party'
+            
+            if is_party:
+                # Remove player from battle participants
+                await self.db.execute("""
+                    DELETE FROM battle_participants
+                    WHERE instance_id = $1 AND player_id = $2
+                """, instance_id, player_id)
+                
+                # Remove player from turn order
+                turn_order = await self.db.fetchval("""
+                    SELECT turn_order FROM battle_instances WHERE instance_id = $1
+                """, instance_id)
+                
+                if turn_order and player_id in turn_order:
+                    new_turn_order = [p for p in turn_order if p != player_id]
+                    await self.db.execute("""
+                        UPDATE battle_instances
+                        SET turn_order = $1
+                        WHERE instance_id = $2
+                    """, new_turn_order, instance_id)
+                    
+                    # If it was this player's turn, advance to next player
+                    current_turn = await self.get_current_turn_player(instance_id)
+                    if current_turn == player_id:
+                        # Update current turn player to None first, then advance
+                        await self.db.execute("""
+                            UPDATE battle_instances
+                            SET current_turn_player_id = NULL
+                            WHERE instance_id = $1
+                        """, instance_id)
+                        
+                        # Find next alive player in turn order
+                        next_player = None
+                        for p_id in new_turn_order:
+                            participant = await self.db.fetchrow("""
+                                SELECT current_health FROM battle_participants
+                                WHERE instance_id = $1 AND player_id = $2
+                            """, instance_id, p_id)
+                            if participant and participant['current_health'] > 0:
+                                next_player = p_id
+                                break
+                        
+                        if next_player:
+                            # Set next player as current turn
+                            await self.db.execute("""
+                                UPDATE battle_instances
+                                SET current_turn_player_id = $1
+                                WHERE instance_id = $2
+                            """, next_player, instance_id)
+                            
+                            # Get channel and prompt next player
+                            channel_id = await self.db.fetchval("""
+                                SELECT channel_id FROM battle_instances WHERE instance_id = $1
+                            """, instance_id)
+                            channel = None
+                            if channel_id:
+                                try:
+                                    channel = await self.bot.fetch_channel(channel_id)
+                                except:
+                                    pass
+                            if channel:
+                                await self.prompt_next_player_turn(instance_id, next_player, channel)
+                
+                # Remove player from party
+                party = await self.db.fetchrow("""
+                    SELECT p.* FROM parties p
+                    JOIN party_members pm ON p.party_id = pm.party_id
+                    WHERE pm.player_id = $1 AND p.is_active = true
+                """, player_id)
+                
+                if party:
+                    # If leader, disband party
+                    if party['leader_id'] == player_id:
+                        await self.db.execute("""
+                            UPDATE parties SET is_active = false
+                            WHERE party_id = $1
+                        """, party['party_id'])
+                        await self.db.execute("""
+                            DELETE FROM party_members
+                            WHERE party_id = $1
+                        """, party['party_id'])
+                        
+                        # Notify remaining party members
+                        remaining_members = await self.db.fetch("""
+                            SELECT pm.player_id, players.discord_id
+                            FROM party_members pm
+                            JOIN players ON pm.player_id = players.playerid
+                            WHERE pm.party_id = $1
+                        """, party['party_id'])
+                        
+                        for member in remaining_members:
+                            try:
+                                member_user = await self.bot.fetch_user(member['discord_id'])
+                                if member_user:
+                                    await member_user.send("⚠️ Your party leader has fled and the party has been disbanded!")
+                            except:
+                                pass
+                    else:
+                        # Just remove from party
+                        await self.db.execute("""
+                            DELETE FROM party_members
+                            WHERE party_id = $1 AND player_id = $2
+                        """, party['party_id'], player_id)
+                        
+                        # Notify party leader
+                        leader_discord_id = await self.db.fetchval("""
+                            SELECT discord_id FROM players WHERE playerid = $1
+                        """, party['leader_id'])
+                        if leader_discord_id:
+                            try:
+                                leader_user = await self.bot.fetch_user(leader_discord_id)
+                                if leader_user:
+                                    await leader_user.send(f"⚠️ {player_name} has fled from battle and left the party!")
+                            except:
+                                pass
+                
+                # Send message to battle channel
+                await self.send_battle_message(instance_id, f"🏃 **{player_name}** has successfully fled from battle!")
+                
+                # Check if any participants remain
+                remaining_participants = await self.db.fetch("""
+                    SELECT * FROM battle_participants
+                    WHERE instance_id = $1 AND current_health > 0
+                """, instance_id)
+                
+                if not remaining_participants:
+                    # No one left in battle - end it
+                    await self.send_battle_message(instance_id, "💀 All party members have fled or been defeated! Battle ended.")
+                    await self.end_battle_instance(instance_id)
+                    # Clean up active battles for all participants
+                    all_participants = await self.db.fetch("""
+                        SELECT player_id FROM battle_participants WHERE instance_id = $1
+                    """, instance_id)
+                    for p in all_participants:
+                        if p['player_id'] in self.active_battles:
+                            del self.active_battles[p['player_id']]
+                
+                # Clean up active battles for this player
+                if player_id in self.active_battles:
+                    del self.active_battles[player_id]
+                
+                await ctx.send("You successfully escaped from battle and have been removed from the party!", ephemeral=True)
+            else:
+                # Solo battle - end the instance
+                await self.end_battle_instance(instance_id)
+                if player_id in self.active_battles:
+                    del self.active_battles[player_id]
+                await ctx.send("You successfully escaped from battle!", ephemeral=True)
             return
         else:
             await ctx.send(f"Failed to escape! {len(successful_enemies)} enemies caught up to you!", ephemeral=True)
