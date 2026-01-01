@@ -90,6 +90,10 @@ class MiningModule(Extension):
         # Use the imported Inventory class to add items to inventory
         inventory = Inventory(self.db, player_id)
         result_message = await inventory.add_item(item_id, number_of_ores)
+        
+        # Log the result for debugging
+        import logging
+        logging.info(f"Mining: Added {number_of_ores}x item_id {item_id} for player {player_id}. Result: {result_message}")
 
         # Update player experience points (assuming there's a column for mining XP)
         xp_gained = ore['xp_gained']

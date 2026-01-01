@@ -7,8 +7,9 @@ class Inventory:
 
     async def add_item(self, item_id, quantity=1):
         max_slots = await self.db.get_inventory_capacity(self.player_id)
+        # Only count items in main inventory (not in bank, not equipped) - same logic as UI
         current_item_count = await self.db.fetchval(
-            "SELECT COUNT(*) FROM inventory WHERE playerid = $1",
+            "SELECT COUNT(*) FROM inventory WHERE playerid = $1 AND isequipped = FALSE AND (in_bank = FALSE OR in_bank IS NULL)",
             self.player_id
         )
 
@@ -21,24 +22,71 @@ class Inventory:
 
         is_stackable = item_info["max_stack"] > 1
 
+        # Check for existing item in main inventory (not bank)
         existing_item = await self.db.fetchrow(
-            "SELECT * FROM inventory WHERE playerid = $1 AND itemid = $2",
+            "SELECT * FROM inventory WHERE playerid = $1 AND itemid = $2 AND (in_bank = FALSE OR in_bank IS NULL)",
             self.player_id, item_id
         )
 
-        if existing_item and is_stackable:
-            new_quantity = existing_item["quantity"] + quantity
-            await self.db.execute(
-                "UPDATE inventory SET quantity = $1 WHERE inventoryid = $2",
-                new_quantity, existing_item["inventoryid"]
-            )
+        if existing_item:
+            if is_stackable:
+                # Update existing stackable item in inventory
+                new_quantity = existing_item["quantity"] + quantity
+                import logging
+                logging.info(f"Found existing item in inventory. Updating: inventoryid={existing_item['inventoryid']}, current_qty={existing_item['quantity']}, adding={quantity}, new_qty={new_quantity}")
+                
+                result = await self.db.execute(
+                    "UPDATE inventory SET quantity = $1 WHERE inventoryid = $2",
+                    new_quantity, existing_item["inventoryid"]
+                )
+                logging.info(f"UPDATE result: {result}")
+                
+                # Verify the update worked
+                verify = await self.db.fetchrow(
+                    "SELECT quantity FROM inventory WHERE inventoryid = $1",
+                    existing_item["inventoryid"]
+                )
+                logging.info(f"Verified quantity after update: {verify['quantity'] if verify else 'NOT FOUND'}")
+            else:
+                # Item exists but is not stackable
+                return "You already have this non-stackable item in your inventory."
         else:
-            await self.db.execute(
-                "INSERT INTO inventory (playerid, itemid, quantity, isequipped, slot) VALUES ($1, $2, $3, false, NULL)",
-                self.player_id, item_id, quantity
+            # Item doesn't exist in main inventory, check if it exists in bank
+            existing_in_bank = await self.db.fetchrow(
+                "SELECT * FROM inventory WHERE playerid = $1 AND itemid = $2 AND in_bank = TRUE",
+                self.player_id, item_id
             )
+            
+            if existing_in_bank:
+                if is_stackable:
+                    # Move from bank to inventory and update quantity
+                    new_quantity = existing_in_bank["quantity"] + quantity
+                    import logging
+                    logging.info(f"Found item in bank. Moving to inventory and updating: {existing_in_bank['quantity']} + {quantity} = {new_quantity}")
+                    await self.db.execute(
+                        "UPDATE inventory SET quantity = $1, in_bank = FALSE WHERE inventoryid = $2",
+                        new_quantity, existing_in_bank["inventoryid"]
+                    )
+                else:
+                    return "This item is in your bank. Please transfer it to inventory first."
+            else:
+                # Item doesn't exist anywhere, insert new entry
+                if current_item_count >= max_slots:
+                    return "Your inventory is full. You cannot add more items."
+                
+                import logging
+                logging.info(f"Inserting new item: item_id={item_id}, quantity={quantity}")
+                await self.db.execute(
+                    "INSERT INTO inventory (playerid, itemid, quantity, isequipped, slot, in_bank) VALUES ($1, $2, $3, false, NULL, false)",
+                    self.player_id, item_id, quantity
+                )
 
-        remaining_slots = max_slots - (current_item_count + 1)
+        # Recalculate remaining slots after addition (only count main inventory, not bank, not equipped)
+        new_item_count = await self.db.fetchval(
+            "SELECT COUNT(*) FROM inventory WHERE playerid = $1 AND isequipped = FALSE AND (in_bank = FALSE OR in_bank IS NULL)",
+            self.player_id
+        )
+        remaining_slots = max_slots - new_item_count
         return f"Item added to inventory. Remaining slots: {remaining_slots}."
 
     async def remove_item(self, item_id, quantity=1):
