@@ -522,18 +522,79 @@ class playerinterface(Extension):
         if player_data:
             current_location_id = player_data['current_location']
         
-            # Fetch accessible locations using self.bot.db
-            accessible_locations = await self.bot.db.fetch_accessible_locations(current_location_id)
+            # Fetch accessible locations using self.bot.db (pass player_id to check requirements)
+            accessible_locations = await self.bot.db.fetch_accessible_locations(current_location_id, player_id)
 
             if not accessible_locations:
                 await ctx.send("No locations available to travel to from here.", ephemeral=True)
                 return
 
             # Create buttons for each accessible location
-            location_buttons = [
-                Button(style=ButtonStyle.PRIMARY, label=location['name'], custom_id=f"travel_{location['locationid']}_{original_user_id}")
-                for location in accessible_locations
-            ]
+            # Check requirements and style buttons accordingly
+            location_buttons = []
+            for location in accessible_locations:
+                # Check if player meets requirements
+                player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+                player_data = await self.bot.db.fetchrow("""
+                    SELECT pd.xp, pd.playerid
+                    FROM player_data pd
+                    WHERE pd.playerid = $1
+                """, player_id)
+                
+                has_required_item = True
+                meets_xp = True
+                meets_skills = True
+                
+                if location.get('required_item_id'):
+                    has_item = await self.bot.db.fetchval("""
+                        SELECT COUNT(*) > 0
+                        FROM inventory
+                        WHERE playerid = $1 AND itemid = $2 AND (isequipped = FALSE OR isequipped IS NULL)
+                    """, player_id, location['required_item_id'])
+                    has_required_item = has_item if has_item else False
+                
+                if location.get('xp_requirement') and player_data:
+                    meets_xp = player_data['xp'] >= location['xp_requirement']
+                
+                # Check skill requirements if needed
+                if player_data:
+                    skill_check = await self.bot.db.fetchval("""
+                        SELECT NOT EXISTS (
+                            SELECT 1
+                            FROM location_skill_requirements lsr
+                            LEFT JOIN player_skills_xp ps ON ps.playerid = $1
+                            WHERE lsr.locationid = $2
+                            AND CASE 
+                                WHEN lsr.skill_id = 1 THEN ps.fire_magic_xp >= lsr.required_level
+                                WHEN lsr.skill_id = 2 THEN ps.water_magic_xp >= lsr.required_level
+                                WHEN lsr.skill_id = 3 THEN ps.earth_magic_xp >= lsr.required_level
+                                WHEN lsr.skill_id = 4 THEN ps.air_magic_xp >= lsr.required_level
+                                ELSE FALSE
+                            END = FALSE
+                        )
+                    """, player_id, location['locationid'])
+                    meets_skills = skill_check if skill_check is not None else True
+                
+                # Determine button style based on requirements
+                can_travel = has_required_item and meets_xp and meets_skills
+                button_style = ButtonStyle.PRIMARY if can_travel else ButtonStyle.SECONDARY
+                
+                # Add indicator to label if requirements not met
+                label = location['name']
+                if not can_travel:
+                    if not has_required_item:
+                        label = f"{location['name']} 🔒"
+                    elif not meets_xp:
+                        label = f"{location['name']} ⚠️"
+                
+                location_buttons.append(
+                    Button(
+                        style=button_style, 
+                        label=label, 
+                        custom_id=f"travel_location_{location['locationid']}_{original_user_id}",
+                        disabled=not can_travel
+                    )
+                )
 
             # Arrange buttons in rows of up to 5
             button_rows = [location_buttons[i:i + 5] for i in range(0, len(location_buttons), 5)]
@@ -543,6 +604,167 @@ class playerinterface(Extension):
         else:
             await ctx.send("Your player data could not be found.", ephemeral=True)
 
+
+    @component_callback(re.compile(r"^travel_location_\d+_\d+$"))
+    async def travel_location_handler(self, ctx: ComponentContext):
+        """Handle clicking a specific travel destination button."""
+        parts = ctx.custom_id.split("_")
+        location_id = int(parts[2])
+        original_user_id = int(parts[3])
+        
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+        
+        await ctx.defer(ephemeral=True)
+        
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        player_data = await self.bot.db.fetchrow("""
+            SELECT pd.current_location, pd.xp, pd.playerid
+            FROM player_data pd
+            WHERE pd.playerid = $1
+        """, player_id)
+        
+        if not player_data:
+            await ctx.send("Your player data could not be found.", ephemeral=True)
+            return
+        
+        # Get location details
+        location = await self.bot.db.fetchrow("""
+            SELECT locationid, name, required_item_id, xp_requirement
+            FROM locations
+            WHERE locationid = $1
+        """, location_id)
+        
+        if not location:
+            await ctx.send("Location not found.", ephemeral=True)
+            return
+        
+        # Check if path exists
+        path_exists = await self.bot.db.fetchval("""
+            SELECT EXISTS(
+                SELECT 1 FROM paths
+                WHERE from_location_id = $1 AND to_location_id = $2
+            )
+        """, player_data['current_location'], location_id)
+        
+        if not path_exists:
+            await ctx.send("There is no path to this location from your current location.", ephemeral=True)
+            return
+        
+        # Check requirements
+        has_required_item = True
+        if location['required_item_id']:
+            has_item = await self.bot.db.fetchval("""
+                SELECT COUNT(*) > 0
+                FROM inventory
+                WHERE playerid = $1 AND itemid = $2 AND (isequipped = FALSE OR isequipped IS NULL)
+            """, player_id, location['required_item_id'])
+            has_required_item = has_item if has_item else False
+            
+            if not has_required_item:
+                item_name = await self.bot.db.fetchval("""
+                    SELECT name FROM items WHERE itemid = $1
+                """, location['required_item_id'])
+                await ctx.send(
+                    f"You need **{item_name or 'a required item'}** to travel to {location['name']}.",
+                    ephemeral=True
+                )
+                return
+        
+        if location['xp_requirement'] and player_data['xp'] < location['xp_requirement']:
+            await ctx.send(
+                f"You need {location['xp_requirement']} XP to travel to {location['name']}. "
+                f"You currently have {player_data['xp']} XP.",
+                ephemeral=True
+            )
+            return
+        
+        # Check skill requirements
+        skill_check = await self.bot.db.fetchval("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM location_skill_requirements lsr
+                LEFT JOIN player_skills_xp ps ON ps.playerid = $1
+                WHERE lsr.locationid = $2
+                AND CASE 
+                    WHEN lsr.skill_id = 1 THEN ps.fire_magic_xp >= lsr.required_level
+                    WHEN lsr.skill_id = 2 THEN ps.water_magic_xp >= lsr.required_level
+                    WHEN lsr.skill_id = 3 THEN ps.earth_magic_xp >= lsr.required_level
+                    WHEN lsr.skill_id = 4 THEN ps.air_magic_xp >= lsr.required_level
+                    ELSE FALSE
+                END = FALSE
+            )
+        """, player_id, location_id)
+        
+        if skill_check:
+            await ctx.send(
+                f"You do not meet the skill requirements to travel to {location['name']}.",
+                ephemeral=True
+            )
+            return
+        
+        # Check if player is in a party
+        party = await self.bot.db.fetchrow("""
+            SELECT p.*, pm.role
+            FROM parties p
+            JOIN party_members pm ON p.party_id = pm.party_id
+            WHERE pm.player_id = $1 AND p.is_active = true
+        """, player_id)
+        
+        if party:
+            if party['leader_id'] == player_id:
+                # Leader can move party - travel_party will handle the UI refresh
+                await self.bot.travel_system.travel_party(ctx, player_id, location['name'], party['party_id'])
+                # After party travel, refresh UI for the leader
+                player_data = await self.bot.db.fetchrow("""
+                    SELECT pd.health, pd.mana, pd.stamina, l.name AS location_name, pd.current_location, pd.gold_balance
+                    FROM player_data pd
+                    JOIN locations l ON l.locationid = pd.current_location
+                    WHERE pd.playerid = $1
+                """, player_id)
+                if player_data:
+                    await self.send_player_ui(
+                        ctx,
+                        player_data['location_name'],
+                        player_data['health'],
+                        player_data['mana'],
+                        player_data['stamina'],
+                        player_data['current_location'],
+                        player_data['gold_balance']
+                    )
+            else:
+                await ctx.send(
+                    "You are in a party! Only the party leader can initiate travel. "
+                    "Ask your party leader to move the party, or leave the party to travel solo.",
+                    ephemeral=True
+                )
+            return
+        
+        # Solo travel - update location
+        await self.bot.db.update_player_location(player_id, location_id)
+        
+        # Fetch updated player details to refresh the UI
+        player_data = await self.bot.db.fetchrow("""
+            SELECT pd.health, pd.mana, pd.stamina, l.name AS location_name, pd.current_location, pd.gold_balance
+            FROM player_data pd
+            JOIN locations l ON l.locationid = pd.current_location
+            WHERE pd.playerid = $1
+        """, player_id)
+        
+        if player_data:
+            # Refresh the player UI with updated location
+            await self.send_player_ui(
+                ctx,
+                player_data['location_name'],
+                player_data['health'],
+                player_data['mana'],
+                player_data['stamina'],
+                player_data['current_location'],
+                player_data['gold_balance']
+            )
+        else:
+            await ctx.send(f"You have successfully traveled to **{location['name']}**.", ephemeral=True)
 
     @component_callback(re.compile(r"^fish_\d+$"))
     async def fish_button_handler(self, ctx: ComponentContext):

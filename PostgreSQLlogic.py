@@ -136,20 +136,25 @@ class Database:
             return dict(row) if row else None
 
         
-    async def fetch_accessible_locations(self, current_location_id):
+    async def fetch_accessible_locations(self, current_location_id, player_id=None):
         async with self.pool.acquire() as conn:
-            # Retrieve locations that are directly accessible from the current location
+            # Show all locations that have paths from the current location
+            # Requirements will be checked when the player actually tries to travel
+            # This allows players to see all available destinations
             rows = await conn.fetch("""
                 SELECT 
                     loc.name, 
                     loc.description, 
-                    loc.locationid
+                    loc.locationid,
+                    loc.required_item_id,
+                    loc.xp_requirement
                 FROM 
                     paths 
                 JOIN 
                     locations loc ON loc.locationid = paths.to_location_id
                 WHERE 
-                    paths.from_location_id = $1;
+                    paths.from_location_id = $1
+                ORDER BY loc.name;
             """, current_location_id)
             return rows
         
