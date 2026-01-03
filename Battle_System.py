@@ -2351,11 +2351,9 @@ class BattleSystem(Extension):
             await ctx.send("No active battle found.", ephemeral=True)
             return
         
-        # Check if it's this player's turn (for party battles)
+        # Check if it's this player's turn (for party battles) - but allow fleeing anytime
         current_turn_player = await self.get_current_turn_player(instance_id)
-        if current_turn_player and current_turn_player != player_id:
-            await ctx.send("⏳ It's not your turn! You can only flee during your turn.", ephemeral=True)
-            return
+        is_their_turn = (current_turn_player == player_id) if current_turn_player else False
 
         # Fetch player stats from the view
         player_stats = await self.db.fetchrow("""
@@ -2417,9 +2415,8 @@ class BattleSystem(Extension):
             is_party = battle_state.get('instance_type') == 'party'
             
             if is_party:
-                # Check if it was this player's turn BEFORE removing them
-                current_turn = await self.get_current_turn_player(instance_id)
-                was_their_turn = (current_turn == player_id)
+                # Use the turn check we did earlier (before any changes)
+                was_their_turn = is_their_turn
                 
                 # Get current turn order to find next player
                 turn_order = await self.db.fetchval("""
@@ -2610,8 +2607,8 @@ class BattleSystem(Extension):
             if not battle_state:
                 return
             
-            # Advance turn for party battles (since flee attempt uses up the turn)
-            if battle_state['instance_type'] == 'party':
+            # Advance turn for party battles only if it was this player's turn (since flee attempt uses up the turn)
+            if battle_state['instance_type'] == 'party' and is_their_turn:
                 next_player = await self.advance_turn(instance_id)
                 if next_player:
                     # Get channel from battle instance
