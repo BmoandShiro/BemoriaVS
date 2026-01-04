@@ -201,8 +201,22 @@ class InventorySystem(Extension):
         if not items:
             return await ctx.send("No items available to use.", ephemeral=True)
 
-        # Filter to only show usable items (Grimoire type or items that can be used)
-        usable_items = [item for item in items if item['type'] == 'Grimoire' or item['name'] == 'Player Locatinator']
+        # List of known food items (by name, as fallback if type isn't set correctly)
+        known_food_items = [
+            'Chips', 'Smoked Fish Fillet', 'Fish and Chips', 'Fishball Stew'
+        ]
+        
+        # Filter to only show usable items
+        # Primary: Check by type (Consumable, Food, Grimoire)
+        # Fallback: Check by name for specific items
+        usable_items = [
+            item for item in items 
+            if item['type'] == 'Grimoire' 
+            or item['type'] == 'Food' 
+            or item['type'] == 'Consumable'
+            or item['name'] == 'Player Locatinator'
+            or item['name'] in known_food_items  # Fallback for items not yet updated
+        ]
         
         if not usable_items:
             return await ctx.send("You don't have any usable items in your inventory.", ephemeral=True)
@@ -242,8 +256,106 @@ class InventorySystem(Extension):
         if item_info['name'] == 'Player Locatinator':
             # Show player locator
             await self.show_player_locator(ctx, player_id)
+        elif item_info['type'] == 'Food' or item_info['type'] == 'Consumable':
+            # Handle food consumption
+            await self.consume_food(ctx, player_id, item_id, item_info['name'])
         else:
             await ctx.send(f"{item_info['name']} cannot be used yet.", ephemeral=True)
+    
+    async def consume_food(self, ctx, player_id, item_id, item_name):
+        """Handle food consumption with healing and other effects."""
+        # Get food effects based on item name
+        food_effects = self.get_food_effects(item_name)
+        
+        if not food_effects:
+            await ctx.send(f"{item_name} cannot be consumed.", ephemeral=True)
+            return
+        
+        # Get current player stats
+        player_stats = await self.db.fetchrow("""
+            SELECT health, mana, stamina, max_health, max_mana, max_stamina
+            FROM player_data
+            WHERE playerid = $1
+        """, player_id)
+        
+        if not player_stats:
+            await ctx.send("Error: Could not retrieve player stats.", ephemeral=True)
+            return
+        
+        # Calculate new stats with effects
+        new_health = min(player_stats['health'] + food_effects.get('health', 0), player_stats['max_health'])
+        new_mana = min(player_stats['mana'] + food_effects.get('mana', 0), player_stats['max_mana'])
+        new_stamina = min(player_stats['stamina'] + food_effects.get('stamina', 0), player_stats['max_stamina'])
+        
+        # Calculate actual healing/restoration (capped at max)
+        health_healed = new_health - player_stats['health']
+        mana_restored = new_mana - player_stats['mana']
+        stamina_restored = new_stamina - player_stats['stamina']
+        
+        # Update player stats
+        await self.db.execute("""
+            UPDATE player_data
+            SET health = $1, mana = $2, stamina = $3
+            WHERE playerid = $4
+        """, new_health, new_mana, new_stamina, player_id)
+        
+        # Remove one quantity of the food item
+        inventory_entry = await self.db.fetchrow("""
+            SELECT inventoryid, quantity
+            FROM inventory
+            WHERE playerid = $1 AND itemid = $2 AND isequipped = FALSE
+            LIMIT 1
+        """, player_id, item_id)
+        
+        if inventory_entry:
+            if inventory_entry['quantity'] > 1:
+                # Decrease quantity
+                await self.db.execute("""
+                    UPDATE inventory
+                    SET quantity = quantity - 1
+                    WHERE inventoryid = $1
+                """, inventory_entry['inventoryid'])
+            else:
+                # Remove item if quantity is 1
+                await self.db.execute("""
+                    DELETE FROM inventory
+                    WHERE inventoryid = $1
+                """, inventory_entry['inventoryid'])
+        
+        # Build consumption message
+        effects = []
+        if health_healed > 0:
+            effects.append(f"**+{health_healed} HP**")
+        if mana_restored > 0:
+            effects.append(f"**+{mana_restored} Mana**")
+        if stamina_restored > 0:
+            effects.append(f"**+{stamina_restored} Stamina**")
+        
+        if effects:
+            message = f"🍽️ You consumed **{item_name}**! {' '.join(effects)}"
+            if new_health >= player_stats['max_health'] and health_healed > 0:
+                message += " (Health at maximum)"
+            if new_mana >= player_stats['max_mana'] and mana_restored > 0:
+                message += " (Mana at maximum)"
+            if new_stamina >= player_stats['max_stamina'] and stamina_restored > 0:
+                message += " (Stamina at maximum)"
+        else:
+            message = f"🍽️ You consumed **{item_name}**, but you're already at maximum stats!"
+        
+        await ctx.send(message, ephemeral=True)
+    
+    def get_food_effects(self, item_name):
+        """Get the effects of a food item. Returns dict with health, mana, stamina, and future modifiers."""
+        # Food healing values
+        food_effects_map = {
+            'Chips': {'health': 10},
+            'Smoked Fish Fillet': {'health': 12},
+            'Fish and Chips': {'health': 20},
+            'Fishball Stew': {'health': 25}
+        }
+        
+        # Return effects for this food item, or None if not found
+        return food_effects_map.get(item_name)
     
     async def show_player_locator(self, ctx, player_id):
         """Display all players with their location, HP, mana, and stamina."""
