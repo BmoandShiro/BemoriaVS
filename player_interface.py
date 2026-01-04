@@ -504,9 +504,57 @@ class playerinterface(Extension):
             for quest in active_quests:
                 embed.add_field(name=quest['name'], value=quest['description'], inline=False)
 
+            # Add button to view completed quests
+            button = Button(
+                style=ButtonStyle.SECONDARY,
+                label="Completed Quests",
+                custom_id=f"completed_quests_{original_user_id}"
+            )
+            await ctx.send(embeds=[embed], components=[button], ephemeral=True)
+        else:
+            # Still show the button even if no active quests
+            button = Button(
+                style=ButtonStyle.SECONDARY,
+                label="Completed Quests",
+                custom_id=f"completed_quests_{original_user_id}"
+            )
+            await ctx.send("You currently have no active quests.", components=[button], ephemeral=True)
+
+    @component_callback(re.compile(r"^completed_quests_\d+$"))
+    async def completed_quests_button_handler(self, ctx: ComponentContext):
+        original_user_id = int(ctx.custom_id.split("_")[2])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+
+        # Fetch the completed quests from player_quests table
+        completed_quests = await self.bot.db.fetch("""
+            SELECT q.name, q.description
+            FROM player_quests pq
+            JOIN quests q ON pq.quest_id = q.quest_id
+            WHERE pq.player_id = $1 AND pq.status = 'completed'
+            ORDER BY q.name
+        """, player_id)
+
+        # Create an embed to display the completed quests
+        if completed_quests:
+            embed = Embed(
+                title="Completed Quests",
+                description="Here are all your completed quests:",
+                color=0xFFD700  # Gold color for completed quests
+            )
+            for quest in completed_quests:
+                embed.add_field(
+                    name=f"✅ {quest['name']}", 
+                    value=quest['description'], 
+                    inline=False
+                )
+
             await ctx.send(embeds=[embed], ephemeral=True)
         else:
-            await ctx.send("You currently have no active quests.", ephemeral=True)
+            await ctx.send("You have not completed any quests yet.", ephemeral=True)
 
     @component_callback(re.compile(r"^travel_to_\d+$"))
     async def travel_to_button_handler(self, ctx: ComponentContext):
