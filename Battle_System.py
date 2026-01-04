@@ -1799,6 +1799,312 @@ class BattleSystem(Extension):
             traceback.print_exc()
             await ctx.send(f"Error: Could not process ability cast. {str(e)}", ephemeral=True)
 
+    @component_callback(re.compile(r"^use_item_combat_\d+$"))
+    async def use_item_combat_handler(self, ctx: ComponentContext):
+        """Handle using items during combat."""
+        try:
+            # Extract player ID from custom_id
+            _, _, _, player_id = ctx.custom_id.split("_")
+            player_id = int(player_id)
+            
+            # Verify player identity
+            player_data = await self.db.fetchrow("""
+                SELECT playerid FROM players WHERE discord_id = $1
+            """, ctx.author.id)
+            
+            if not player_data or player_data['playerid'] != player_id:
+                await ctx.send("You are not authorized to use this button.", ephemeral=True)
+                return
+            
+            # Get battle instance
+            instance_id = await self.get_player_battle_instance(player_id)
+            if not instance_id:
+                await ctx.send("No active battle found.", ephemeral=True)
+                return
+            
+            # Check if it's this player's turn (for party battles)
+            current_turn_player = await self.get_current_turn_player(instance_id)
+            if current_turn_player and current_turn_player != player_id:
+                await ctx.send("⏳ It's not your turn! Please wait for your turn.", ephemeral=True)
+                return
+            
+            # Get usable items from inventory
+            items = await self.db.fetch("""
+                SELECT i.itemid, i.name, i.type FROM inventory inv
+                JOIN items i ON inv.itemid = i.itemid
+                WHERE inv.playerid = $1 AND inv.isequipped = false
+            """, player_id)
+            
+            if not items:
+                await ctx.send("No items available to use.", ephemeral=True)
+                return
+            
+            # Filter to only show usable items (Consumable, Food, Grimoire, or specific items)
+            known_food_items = ['Chips', 'Smoked Fish Fillet', 'Fish and Chips', 'Fishball Stew']
+            usable_items = [
+                item for item in items 
+                if item['type'] == 'Grimoire' 
+                or item['type'] == 'Food' 
+                or item['type'] == 'Consumable'
+                or item['name'] == 'Player Locatinator'
+                or item['name'] in known_food_items
+            ]
+            
+            if not usable_items:
+                await ctx.send("You don't have any usable items in your inventory.", ephemeral=True)
+                return
+            
+            # Create selection menu
+            options = [StringSelectOption(label=item['name'], value=str(item['itemid'])) for item in usable_items]
+            use_select = StringSelectMenu(
+                custom_id=f"select_combat_item_{player_id}",
+                placeholder="Select an item to use"
+            )
+            use_select.options = options
+            
+            await ctx.send("Choose an item to use:", components=[use_select], ephemeral=True)
+            
+        except Exception as e:
+            logging.error(f"Error in use_item_combat_handler: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send("Error: Could not process item selection.", ephemeral=True)
+    
+    @component_callback(re.compile(r"^select_combat_item_\d+$"))
+    async def select_combat_item_handler(self, ctx: ComponentContext):
+        """Handle item selection and consumption during combat."""
+        try:
+            # Extract player ID
+            _, _, _, player_id = ctx.custom_id.split("_")
+            player_id = int(player_id)
+            
+            # Verify player identity
+            player_data = await self.db.fetchrow("""
+                SELECT playerid FROM players WHERE discord_id = $1
+            """, ctx.author.id)
+            
+            if not player_data or player_data['playerid'] != player_id:
+                await ctx.send("You are not authorized to use this.", ephemeral=True)
+                return
+            
+            item_id = int(ctx.values[0])
+            
+            # Get battle instance
+            instance_id = await self.get_player_battle_instance(player_id)
+            if not instance_id:
+                await ctx.send("No active battle found.", ephemeral=True)
+                return
+            
+            # Check if it's this player's turn (for party battles)
+            current_turn_player = await self.get_current_turn_player(instance_id)
+            if current_turn_player and current_turn_player != player_id:
+                await ctx.send("⏳ It's not your turn! Please wait for your turn.", ephemeral=True)
+                return
+            
+            battle_state = await self.get_instance_state(instance_id)
+            if not battle_state:
+                await ctx.send("Error: Could not retrieve battle state.", ephemeral=True)
+                return
+            
+            # Get item details
+            item_info = await self.db.fetchrow("""
+                SELECT itemid, name, type FROM items WHERE itemid = $1
+            """, item_id)
+            
+            if not item_info:
+                await ctx.send("Item not found.", ephemeral=True)
+                return
+            
+            # Check if player has the item
+            has_item = await self.db.fetchval("""
+                SELECT COUNT(*) > 0
+                FROM inventory
+                WHERE playerid = $1 AND itemid = $2 AND isequipped = FALSE
+            """, player_id, item_id)
+            
+            if not has_item:
+                await ctx.send("You don't have this item in your inventory.", ephemeral=True)
+                return
+            
+            await ctx.defer(ephemeral=True)
+            
+            # Handle item usage
+            if item_info['name'] == 'Player Locatinator':
+                # Player Locatinator - show player locator
+                inventory_system = self.bot.get_ext("InventorySystem")
+                if inventory_system:
+                    await inventory_system.show_player_locator(ctx, player_id)
+                else:
+                    await ctx.send("Player Locatinator cannot be used in combat.", ephemeral=True)
+                    return
+            elif item_info['type'] == 'Food' or item_info['type'] == 'Consumable':
+                # Consume food/item
+                await self.consume_item_in_combat(ctx, player_id, item_id, item_info['name'], instance_id, battle_state)
+            else:
+                await ctx.send(f"{item_info['name']} cannot be used in combat.", ephemeral=True)
+                return
+            
+        except Exception as e:
+            logging.error(f"Error in select_combat_item_handler: {e}")
+            import traceback
+            traceback.print_exc()
+            await ctx.send("Error: Could not process item usage.", ephemeral=True)
+    
+    async def consume_item_in_combat(self, ctx, player_id, item_id, item_name, instance_id, battle_state):
+        """Consume an item during combat and advance turn."""
+        # Get inventory system to use its food effects
+        inventory_system = self.bot.get_ext("InventorySystem")
+        if not inventory_system:
+            await ctx.send("Error: Inventory system not available.", ephemeral=True)
+            return
+        
+        # Get food effects
+        food_effects = inventory_system.get_food_effects(item_name)
+        if not food_effects:
+            await ctx.send(f"{item_name} cannot be consumed.", ephemeral=True)
+            return
+        
+        # Get current player stats
+        player_stats = await self.db.fetchrow("""
+            SELECT health, mana, stamina, max_health, max_mana, max_stamina
+            FROM player_data
+            WHERE playerid = $1
+        """, player_id)
+        
+        if not player_stats:
+            await ctx.send("Error: Could not retrieve player stats.", ephemeral=True)
+            return
+        
+        # Calculate new stats with effects
+        new_health = min(player_stats['health'] + food_effects.get('health', 0), player_stats['max_health'])
+        new_mana = min(player_stats['mana'] + food_effects.get('mana', 0), player_stats['max_mana'])
+        new_stamina = min(player_stats['stamina'] + food_effects.get('stamina', 0), player_stats['max_stamina'])
+        
+        # Calculate actual healing/restoration
+        health_healed = new_health - player_stats['health']
+        mana_restored = new_mana - player_stats['mana']
+        stamina_restored = new_stamina - player_stats['stamina']
+        
+        # Update player stats
+        await self.db.execute("""
+            UPDATE player_data
+            SET health = $1, mana = $2, stamina = $3
+            WHERE playerid = $4
+        """, new_health, new_mana, new_stamina, player_id)
+        
+        # Update battle participant health/mana for party battles
+        if battle_state['instance_type'] == 'party':
+            await self.db.execute("""
+                UPDATE battle_participants
+                SET current_health = $1, current_mana = $2
+                WHERE instance_id = $3 AND player_id = $4
+            """, new_health, new_mana, instance_id, player_id)
+        
+        # Refresh battle state to get updated stats for embeds
+        battle_state = await self.get_instance_state(instance_id)
+        
+        # Remove one quantity of the item
+        inventory_entry = await self.db.fetchrow("""
+            SELECT inventoryid, quantity
+            FROM inventory
+            WHERE playerid = $1 AND itemid = $2 AND isequipped = FALSE
+            LIMIT 1
+        """, player_id, item_id)
+        
+        if inventory_entry:
+            if inventory_entry['quantity'] > 1:
+                await self.db.execute("""
+                    UPDATE inventory
+                    SET quantity = quantity - 1
+                    WHERE inventoryid = $1
+                """, inventory_entry['inventoryid'])
+            else:
+                await self.db.execute("""
+                    DELETE FROM inventory
+                    WHERE inventoryid = $1
+                """, inventory_entry['inventoryid'])
+        
+        # Build consumption message
+        effects = []
+        if health_healed > 0:
+            effects.append(f"**+{health_healed} HP**")
+        if mana_restored > 0:
+            effects.append(f"**+{mana_restored} Mana**")
+        if stamina_restored > 0:
+            effects.append(f"**+{stamina_restored} Stamina**")
+        
+        if effects:
+            message = f"🍽️ You consumed **{item_name}**! {' '.join(effects)}"
+            if new_health >= player_stats['max_health'] and health_healed > 0:
+                message += " (Health at maximum)"
+        else:
+            message = f"🍽️ You consumed **{item_name}**, but you're already at maximum stats!"
+        
+        # Send message to battle channel for party battles
+        if battle_state['instance_type'] == 'party':
+            player_name = await self.db.fetchval("""
+                SELECT name FROM players WHERE playerid = $1
+            """, player_id)
+            if player_name:
+                await self.send_battle_message(instance_id, f"🍽️ **{player_name}** consumed **{item_name}**! {' '.join(effects) if effects else '(no effect)'}")
+        
+        await ctx.send(message, ephemeral=True)
+        
+        # Enemy's turn - in party battles, enemies attack random participants
+        player_survived = True
+        if battle_state['instance_type'] == 'party':
+            for battle_enemy in battle_state['enemies']:
+                if battle_enemy['current_health'] > 0:
+                    # Select random target from participants
+                    target_participant = random.choice(battle_state['participants'])
+                    survived = await self.enemy_attack(
+                        ctx, 
+                        target_participant['player_id'], 
+                        await self.db.fetchrow("""
+                            SELECT * FROM enemies WHERE enemyid = $1
+                        """, battle_enemy['enemy_id']),
+                        instance_id
+                    )
+                    player_survived = player_survived and survived
+        else:
+            # Solo battle - enemy attacks player
+            if battle_state['enemies']:
+                target_enemy = await self.db.fetchrow("""
+                    SELECT * FROM enemies WHERE enemyid = $1
+                """, battle_state['enemies'][0]['enemy_id'])
+                if target_enemy:
+                    player_survived = await self.enemy_attack(ctx, player_id, target_enemy, instance_id)
+        
+        # Advance turn for party battles
+        if battle_state['instance_type'] == 'party':
+            next_player = await self.advance_turn(instance_id)
+            if next_player:
+                # Get channel from battle instance
+                channel_id = await self.db.fetchval("""
+                    SELECT channel_id FROM battle_instances WHERE instance_id = $1
+                """, instance_id)
+                channel = None
+                if channel_id:
+                    try:
+                        channel = await self.bot.fetch_channel(channel_id)
+                    except:
+                        pass
+                # Prompt next player
+                await self.prompt_next_player_turn(instance_id, next_player, channel)
+        else:
+            # Solo battle - refresh status
+            if player_survived:
+                battle_state = await self.get_instance_state(instance_id)
+                await self.refresh_battle_status(ctx, battle_state, player_id)
+        
+        # Check combat end
+        if battle_state['enemies']:
+            target_enemy = await self.db.fetchrow("""
+                SELECT * FROM enemies WHERE enemyid = $1
+            """, battle_state['enemies'][0]['enemy_id'])
+            if target_enemy:
+                await self.handle_combat_end(ctx, player_id, target_enemy)
+
     @staticmethod
     def get_damage_resistance_mapping():
         return {
@@ -2225,6 +2531,11 @@ class BattleSystem(Extension):
                             style=ButtonStyle.SECONDARY,
                             label="Use Ability",
                             custom_id=f"ability_select_{player_id}"
+                        ),
+                        Button(
+                            style=ButtonStyle.SUCCESS,
+                            label="Use Item",
+                            custom_id=f"use_item_combat_{player_id}"
                         ),
                         Button(
                             style=ButtonStyle.DANGER,

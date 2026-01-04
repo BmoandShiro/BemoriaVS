@@ -187,6 +187,12 @@ class playerinterface(Extension):
                     disabled=not is_my_turn
                 ),
                 Button(
+                    style=ButtonStyle.SUCCESS,
+                    label="Use Item",
+                    custom_id=f"use_item_combat_{player_id}",
+                    disabled=not is_my_turn
+                ),
+                Button(
                     style=ButtonStyle.DANGER,
                     label="Flee Battle",
                     custom_id=f"flee_{player_id}"
