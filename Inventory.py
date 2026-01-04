@@ -260,7 +260,13 @@ class Inventory:
         elif item_info['type'] == "Feet":
             determined_slot = "feet"
         elif item_info['type'] == "Neck":
-            determined_slot = "neck"
+            # Neck items can go in neck slot or left_hand (off hand) slot
+            if not await self.is_slot_filled("neck"):
+                determined_slot = "neck"
+            elif not await self.is_slot_filled("left_hand"):
+                determined_slot = "left_hand"
+            else:
+                return "Both neck and off hand slots are occupied. Please unequip an item first."
         elif item_info['type'] == "Finger":
             if not await self.is_slot_filled("finger1"):
                 determined_slot = "finger1"
@@ -278,7 +284,7 @@ class Inventory:
             elif not await self.is_slot_filled("left_hand"):
                 determined_slot = "left_hand"
             else:
-                return "Both hands are occupied. Please unequip a weapon first."
+                return "Both primary hand and off hand are occupied. Please unequip a weapon first."
         elif item_info['type'] == "2H_weapon":
             # 2H weapons require both hands to be free and no other 2H weapon equipped
             if await self.is_slot_filled("2H_weapon"):
@@ -308,7 +314,7 @@ class Inventory:
                 elif not await self.is_slot_filled("left_hand"):
                     determined_slot = "left_hand"
                 else:
-                    return "Both hands are occupied. Please unequip a weapon first."
+                    return "Both primary hand and off hand are occupied. Please unequip a weapon first."
 
         if not determined_slot:
             return f"No available slot for {item_info['name']}."

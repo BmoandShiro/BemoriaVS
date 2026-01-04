@@ -65,6 +65,9 @@ class ShopManager(Extension):
         # Fetch shop items for the location using location_id
         shop_items = await self.get_shop_items(location_id)
 
+        # Check if this is Fern's shop (no fish selling)
+        is_ferns_shop = "fern" in location_name.lower() and "grimoire" in location_name.lower()
+
         # Create an embed to display shop items
         shop_embed = Embed(
             title=f"{location_name} Shop",
@@ -93,10 +96,17 @@ class ShopManager(Extension):
             # Set the options after creating the select menu
             buy_select.options = options
 
-            # Arrange components with sell button and buy selection dropdown
-            components = [[buy_select], [Button(style=ButtonStyle.PRIMARY, label="Sell Fish", custom_id="sell_fish")]]
+            # Arrange components - exclude "Sell Fish" button for Fern's shop
+            if is_ferns_shop:
+                components = [[buy_select]]
+            else:
+                components = [[buy_select], [Button(style=ButtonStyle.PRIMARY, label="Sell Fish", custom_id="sell_fish")]]
         else:
-            components = [[Button(style=ButtonStyle.PRIMARY, label="Sell Fish", custom_id="sell_fish")]]
+            # No items - only show sell button if not Fern's shop
+            if is_ferns_shop:
+                components = []
+            else:
+                components = [[Button(style=ButtonStyle.PRIMARY, label="Sell Fish", custom_id="sell_fish")]]
 
         # Log to check how buttons are arranged
         logging.info(f"Components for shop: {components}")

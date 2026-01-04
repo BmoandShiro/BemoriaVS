@@ -43,12 +43,13 @@ class InventorySystem(Extension):
                     else:
                         inventory_view += f"{item['item_name']} (x{item['quantity']})\n"
 
-        # Adding equip, drop, and view equipped buttons
+        # Adding equip, use, drop, and view equipped buttons
         equip_button = Button(style=ButtonStyle.SUCCESS, label="Equip Item", custom_id="equip_item")
+        use_button = Button(style=ButtonStyle.SUCCESS, label="Use Item", custom_id="use_item")
         view_equipped_button = Button(style=ButtonStyle.PRIMARY, label="View Equipped", custom_id="view_equipped")
         drop_button = Button(style=ButtonStyle.DANGER, label="Drop Item", custom_id="drop_item")
 
-        components = [[equip_button, view_equipped_button, drop_button]]
+        components = [[equip_button, use_button, view_equipped_button, drop_button]]
 
         # Add transfer buttons if the player is at a bank
         if is_at_bank:
@@ -188,6 +189,134 @@ class InventorySystem(Extension):
 
         await ctx.send("Choose an item to equip:", components=[equip_select], ephemeral=True)
 
+    @component_callback("use_item")
+    async def use_item_handler(self, ctx: ComponentContext):
+        player_id = await self.db.get_or_create_player(ctx.author.id)
+        items = await self.db.fetch("""
+            SELECT i.itemid, i.name, i.type FROM inventory inv
+            JOIN items i ON inv.itemid = i.itemid
+            WHERE inv.playerid = $1 AND inv.isequipped = false
+        """, player_id)
+
+        if not items:
+            return await ctx.send("No items available to use.", ephemeral=True)
+
+        # Filter to only show usable items (Grimoire type or items that can be used)
+        usable_items = [item for item in items if item['type'] == 'Grimoire' or item['name'] == 'Player Locatinator']
+        
+        if not usable_items:
+            return await ctx.send("You don't have any usable items in your inventory.", ephemeral=True)
+
+        options = [StringSelectOption(label=item['name'], value=str(item['itemid'])) for item in usable_items]
+        use_select = StringSelectMenu(custom_id="select_use_item", placeholder="Select an item to use")
+        use_select.options = options
+
+        await ctx.send("Choose an item to use:", components=[use_select], ephemeral=True)
+
+    @component_callback("select_use_item")
+    async def select_use_item_handler(self, ctx: ComponentContext):
+        item_id = int(ctx.values[0])
+        player_id = await self.db.get_or_create_player(ctx.author.id)
+        
+        # Get item details
+        item_info = await self.db.fetchrow("""
+            SELECT itemid, name, type FROM items WHERE itemid = $1
+        """, item_id)
+        
+        if not item_info:
+            await ctx.send("Item not found.", ephemeral=True)
+            return
+        
+        # Check if player has the item
+        has_item = await self.db.fetchval("""
+            SELECT COUNT(*) > 0
+            FROM inventory
+            WHERE playerid = $1 AND itemid = $2 AND isequipped = FALSE
+        """, player_id, item_id)
+        
+        if not has_item:
+            await ctx.send("You don't have this item in your inventory.", ephemeral=True)
+            return
+        
+        # Handle specific items
+        if item_info['name'] == 'Player Locatinator':
+            # Show player locator
+            await self.show_player_locator(ctx, player_id)
+        else:
+            await ctx.send(f"{item_info['name']} cannot be used yet.", ephemeral=True)
+    
+    async def show_player_locator(self, ctx, player_id):
+        """Display all players with their location, HP, mana, and stamina."""
+        from interactions import Embed
+        
+        # Get all players with their current stats
+        all_players = await self.db.fetch("""
+            SELECT 
+                pd.playerid,
+                pd.health,
+                pd.mana,
+                pd.stamina,
+                l.name AS location_name,
+                players.discord_id
+            FROM player_data pd
+            JOIN locations l ON l.locationid = pd.current_location
+            JOIN players ON players.playerid = pd.playerid
+            ORDER BY l.name, pd.playerid
+        """)
+        
+        if not all_players:
+            await ctx.send("No players found in the server.", ephemeral=True)
+            return
+        
+        # Create embed with player information
+        embed = Embed(
+            title="Player Locatinator",
+            description="Viewing all players in the server:",
+            color=0x00FF00
+        )
+        
+        # Group by location for better organization
+        players_by_location = {}
+        for player in all_players:
+            location = player['location_name']
+            if location not in players_by_location:
+                players_by_location[location] = []
+            players_by_location[location].append(player)
+        
+        # Add fields for each location
+        for location, players in sorted(players_by_location.items()):
+            player_list = []
+            for p in players:
+                try:
+                    user = await self.bot.fetch_user(p['discord_id'])
+                    player_name = user.display_name if user else f"Player {p['playerid']}"
+                except:
+                    player_name = f"Player {p['playerid']}"
+                
+                player_list.append(
+                    f"**{player_name}** - HP: {p['health']}, Mana: {p['mana']}, Stamina: {p['stamina']}"
+                )
+            
+            # Discord embed fields have a 1024 character limit, so split if needed
+            field_value = "\n".join(player_list)
+            if len(field_value) > 1024:
+                # Split into multiple fields if too long
+                chunks = [player_list[i:i+10] for i in range(0, len(player_list), 10)]
+                for i, chunk in enumerate(chunks):
+                    embed.add_field(
+                        name=f"{location} (Part {i+1})" if i > 0 else location,
+                        value="\n".join(chunk),
+                        inline=False
+                    )
+            else:
+                embed.add_field(
+                    name=location,
+                    value=field_value,
+                    inline=False
+                )
+        
+        await ctx.send(embeds=[embed], ephemeral=True)
+
     @component_callback("unequip_item")
     async def unequip_item_handler(self, ctx: ComponentContext):
         player_id = await self.db.get_or_create_player(ctx.author.id)
@@ -205,7 +334,13 @@ class InventorySystem(Extension):
         # Use inventoryid as value to handle duplicate items in different slots
         options = []
         for item in items:
-            slot_name = item['slot'].replace('_', ' ').title() if item['slot'] else 'Unknown Slot'
+            # Map slot names to user-friendly names
+            slot_display_map = {
+                'left_hand': 'Off Hand',
+                '1H_weapon': 'Primary Hand',
+                '2H_weapon': 'Two-Handed Weapon'
+            }
+            slot_name = slot_display_map.get(item['slot'], item['slot'].replace('_', ' ').title() if item['slot'] else 'Unknown Slot')
             label = f"{item['name']} ({slot_name})"
             if item['quantity'] > 1:
                 label += f" x{item['quantity']}"
@@ -285,14 +420,14 @@ class InventorySystem(Extension):
                         description="Use as a tool for woodcutting"
                     ),
                     StringSelectOption(
-                        label="Right Hand (for Combat)",
+                        label="Primary Hand (for Combat)",
                         value=f"right_{item_id}",
-                        description="Equip in right hand for combat"
+                        description="Equip in primary hand for combat"
                     ),
                     StringSelectOption(
-                        label="Left Hand (for Combat)",
+                        label="Off Hand (for Combat)",
                         value=f"left_{item_id}",
-                        description="Equip in left hand for combat"
+                        description="Equip in off hand for combat"
                     )
                 ]
                 
@@ -343,23 +478,23 @@ class InventorySystem(Extension):
                     await ctx.send("No available tool belt slots. Please unequip a tool first.", ephemeral=True)
                     return
             elif slot_type == "right":
-                # Check if right hand (1H_weapon) is available
+                # Check if primary hand (1H_weapon) is available
                 # Also check if 2H weapon is blocking
                 if await inventory.is_slot_filled("2H_weapon"):
-                    await ctx.send("Cannot equip in right hand while a 2-handed weapon is equipped.", ephemeral=True)
+                    await ctx.send("Cannot equip in primary hand while a 2-handed weapon is equipped.", ephemeral=True)
                     return
                 if await inventory.is_slot_filled("1H_weapon"):
-                    await ctx.send("Right hand is already occupied. Please unequip the item first.", ephemeral=True)
+                    await ctx.send("Primary hand is already occupied. Please unequip the item first.", ephemeral=True)
                     return
-                slot = "1H_weapon"  # Using 1H_weapon as right hand
+                slot = "1H_weapon"  # Using 1H_weapon as primary hand
             elif slot_type == "left":
-                # For left hand, check if 2H weapon is blocking
+                # For off hand, check if 2H weapon is blocking
                 if await inventory.is_slot_filled("2H_weapon"):
-                    await ctx.send("Cannot equip in left hand while a 2-handed weapon is equipped.", ephemeral=True)
+                    await ctx.send("Cannot equip in off hand while a 2-handed weapon is equipped.", ephemeral=True)
                     return
                 # Check if left_hand slot exists and is available
                 if await inventory.is_slot_filled("left_hand"):
-                    await ctx.send("Left hand is already occupied. Please unequip the item first.", ephemeral=True)
+                    await ctx.send("Off hand is already occupied. Please unequip the item first.", ephemeral=True)
                     return
                 slot = "left_hand"
             else:
@@ -424,7 +559,13 @@ class InventorySystem(Extension):
                         WHERE inventoryid = $1 AND playerid = $2
                     """, inventory_id, player_id)
         
-        slot_name = item_data['slot'].replace('_', ' ').title() if item_data['slot'] else 'Unknown Slot'
+        # Map slot names to user-friendly names
+        slot_display_map = {
+            'left_hand': 'Off Hand',
+            '1H_weapon': 'Primary Hand',
+            '2H_weapon': 'Two-Handed Weapon'
+        }
+        slot_name = slot_display_map.get(item_data['slot'], item_data['slot'].replace('_', ' ').title() if item_data['slot'] else 'Unknown Slot')
         await ctx.send(f"{item_data['name']} unequipped from {slot_name}.", ephemeral=True)
 
     @component_callback("view_equipped")
@@ -461,8 +602,13 @@ class InventorySystem(Extension):
             slot_groups[slot].append(item)
         
         # Display items grouped by slot
+        slot_display_map = {
+            'left_hand': 'Off Hand',
+            '1H_weapon': 'Primary Hand',
+            '2H_weapon': 'Two-Handed Weapon'
+        }
         for slot, items in slot_groups.items():
-            slot_name = slot.replace('_', ' ').title() if slot != 'unknown' else 'Unknown Slot'
+            slot_name = slot_display_map.get(slot, slot.replace('_', ' ').title() if slot != 'unknown' else 'Unknown Slot')
             equipped_view += f"**{slot_name}:**\n"
             for item in items:
                 if item['item_name']:

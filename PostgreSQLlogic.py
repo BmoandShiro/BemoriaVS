@@ -148,7 +148,8 @@ class Database:
                     loc.locationid,
                     loc.required_item_id,
                     loc.xp_requirement,
-                    loc.required_quest_id
+                    loc.required_quest_id,
+                    loc.required_item_equipped
                 FROM 
                     paths 
                 JOIN 

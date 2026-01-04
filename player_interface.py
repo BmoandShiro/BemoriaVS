@@ -578,10 +578,107 @@ class playerinterface(Extension):
             return
         
         # Placeholder: Quest not implemented yet
-        await ctx.send(
-            f"Quest {quest_num} is not yet available. Check back soon!",
-            ephemeral=True
+            await ctx.send(
+                f"Quest {quest_num} is not yet available. Check back soon!",
+                ephemeral=True
+            )
+
+    @component_callback(re.compile(r"^open_player_locatinator_\d+$"))
+    async def open_player_locatinator_handler(self, ctx: ComponentContext):
+        """Handle opening the Player Locatinator from the location button."""
+        # Extract user ID from custom_id
+        original_user_id = int(ctx.custom_id.split("_")[-1])
+        if ctx.author.id != original_user_id:
+            await ctx.send("You are not authorized to interact with this button.", ephemeral=True)
+            return
+        
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        
+        # Verify player is at Ferns Grimoires
+        player_location = await self.bot.db.fetchval("""
+            SELECT current_location FROM player_data WHERE playerid = $1
+        """, player_id)
+        
+        ferns_location_id = await self.bot.db.fetchval("""
+            SELECT locationid FROM locations WHERE name ILIKE '%ferns grimoires%' OR name ILIKE '%fern%grimoire%'
+        """)
+        
+        if player_location != ferns_location_id:
+            await ctx.send("You must be at Fern's Grimoires to use the Player Locatinator.", ephemeral=True)
+            return
+        
+        # Show player locator interface
+        await self.show_player_locator(ctx, player_id)
+
+    async def show_player_locator(self, ctx, player_id):
+        """Display all players with their location, HP, mana, and stamina."""
+        # Get all players with their current stats
+        all_players = await self.bot.db.fetch("""
+            SELECT 
+                pd.playerid,
+                pd.health,
+                pd.mana,
+                pd.stamina,
+                l.name AS location_name,
+                players.discord_id
+            FROM player_data pd
+            JOIN locations l ON l.locationid = pd.current_location
+            JOIN players ON players.playerid = pd.playerid
+            ORDER BY l.name, pd.playerid
+        """)
+        
+        if not all_players:
+            await ctx.send("No players found in the server.", ephemeral=True)
+            return
+        
+        # Create embed with player information
+        embed = Embed(
+            title="Player Locatinator",
+            description="Viewing all players in the server:",
+            color=0x00FF00
         )
+        
+        # Group by location for better organization
+        players_by_location = {}
+        for player in all_players:
+            location = player['location_name']
+            if location not in players_by_location:
+                players_by_location[location] = []
+            players_by_location[location].append(player)
+        
+        # Add fields for each location
+        for location, players in sorted(players_by_location.items()):
+            player_list = []
+            for p in players:
+                try:
+                    user = await self.bot.fetch_user(p['discord_id'])
+                    player_name = user.display_name if user else f"Player {p['playerid']}"
+                except:
+                    player_name = f"Player {p['playerid']}"
+                
+                player_list.append(
+                    f"**{player_name}** - HP: {p['health']}, Mana: {p['mana']}, Stamina: {p['stamina']}"
+                )
+            
+            # Discord embed fields have a 1024 character limit, so split if needed
+            field_value = "\n".join(player_list)
+            if len(field_value) > 1024:
+                # Split into multiple fields if too long
+                chunks = [player_list[i:i+10] for i in range(0, len(player_list), 10)]
+                for i, chunk in enumerate(chunks):
+                    embed.add_field(
+                        name=f"{location} (Part {i+1})" if i > 0 else location,
+                        value="\n".join(chunk),
+                        inline=False
+                    )
+            else:
+                embed.add_field(
+                    name=location,
+                    value=field_value,
+                    inline=False
+                )
+        
+        await ctx.send(embeds=[embed], ephemeral=True)
 
     @component_callback(re.compile(r"^travel_to_\d+$"))
     async def travel_to_button_handler(self, ctx: ComponentContext):
@@ -622,12 +719,22 @@ class playerinterface(Extension):
                 meets_quest = True
                 
                 if location.get('required_item_id'):
-                    has_item = await self.bot.db.fetchval("""
-                        SELECT COUNT(*) > 0
-                        FROM inventory
-                        WHERE playerid = $1 AND itemid = $2 AND (isequipped = FALSE OR isequipped IS NULL)
-                    """, player_id, location['required_item_id'])
-                    has_required_item = has_item if has_item else False
+                    if location.get('required_item_equipped'):
+                        # Check if item is equipped
+                        has_item = await self.bot.db.fetchval("""
+                            SELECT COUNT(*) > 0
+                            FROM inventory
+                            WHERE playerid = $1 AND itemid = $2 AND isequipped = TRUE
+                        """, player_id, location['required_item_id'])
+                        has_required_item = has_item if has_item else False
+                    else:
+                        # Check if item is in inventory (not equipped)
+                        has_item = await self.bot.db.fetchval("""
+                            SELECT COUNT(*) > 0
+                            FROM inventory
+                            WHERE playerid = $1 AND itemid = $2 AND (isequipped = FALSE OR isequipped IS NULL)
+                        """, player_id, location['required_item_id'])
+                        has_required_item = has_item if has_item else False
                 
                 if location.get('xp_requirement') and player_data:
                     meets_xp = player_data['xp'] >= location['xp_requirement']
@@ -719,7 +826,7 @@ class playerinterface(Extension):
         
         # Get location details
         location = await self.bot.db.fetchrow("""
-            SELECT locationid, name, required_item_id, xp_requirement, required_quest_id
+            SELECT locationid, name, required_item_id, xp_requirement, required_quest_id, required_item_equipped
             FROM locations
             WHERE locationid = $1
         """, location_id)
@@ -743,22 +850,42 @@ class playerinterface(Extension):
         # Check requirements
         has_required_item = True
         if location['required_item_id']:
-            has_item = await self.bot.db.fetchval("""
-                SELECT COUNT(*) > 0
-                FROM inventory
-                WHERE playerid = $1 AND itemid = $2 AND (isequipped = FALSE OR isequipped IS NULL)
-            """, player_id, location['required_item_id'])
-            has_required_item = has_item if has_item else False
-            
-            if not has_required_item:
-                item_name = await self.bot.db.fetchval("""
-                    SELECT name FROM items WHERE itemid = $1
-                """, location['required_item_id'])
-                await ctx.send(
-                    f"You need **{item_name or 'a required item'}** to travel to {location['name']}.",
-                    ephemeral=True
-                )
-                return
+            if location.get('required_item_equipped'):
+                # Check if item is equipped (in any slot)
+                has_item = await self.bot.db.fetchval("""
+                    SELECT COUNT(*) > 0
+                    FROM inventory
+                    WHERE playerid = $1 AND itemid = $2 AND isequipped = TRUE
+                """, player_id, location['required_item_id'])
+                has_required_item = has_item if has_item else False
+                
+                if not has_required_item:
+                    item_name = await self.bot.db.fetchval("""
+                        SELECT name FROM items WHERE itemid = $1
+                    """, location['required_item_id'])
+                    await ctx.send(
+                        f"You must have **{item_name or 'a required item'}** equipped to travel to {location['name']}.",
+                        ephemeral=True
+                    )
+                    return
+            else:
+                # Check if item is in inventory (not equipped)
+                has_item = await self.bot.db.fetchval("""
+                    SELECT COUNT(*) > 0
+                    FROM inventory
+                    WHERE playerid = $1 AND itemid = $2 AND (isequipped = FALSE OR isequipped IS NULL)
+                """, player_id, location['required_item_id'])
+                has_required_item = has_item if has_item else False
+                
+                if not has_required_item:
+                    item_name = await self.bot.db.fetchval("""
+                        SELECT name FROM items WHERE itemid = $1
+                    """, location['required_item_id'])
+                    await ctx.send(
+                        f"You need **{item_name or 'a required item'}** to travel to {location['name']}.",
+                        ephemeral=True
+                    )
+                    return
         
         if location['xp_requirement'] and player_data['xp'] < location['xp_requirement']:
             await ctx.send(
@@ -936,6 +1063,13 @@ class playerinterface(Extension):
             if party['leader_id'] == player_id:
                 new_location_name = await self.bot.db.fetchval("SELECT name FROM locations WHERE locationid = $1", location_id)
                 
+                # Get location details to check requirements
+                location_details = await self.bot.db.fetchrow("""
+                    SELECT locationid, name, required_item_id, required_item_equipped
+                    FROM locations
+                    WHERE locationid = $1
+                """, location_id)
+                
                 # Get all party members
                 party_members = await self.bot.db.fetch("""
                     SELECT pm.player_id, players.discord_id
@@ -943,6 +1077,37 @@ class playerinterface(Extension):
                     JOIN players ON pm.player_id = players.playerid
                     WHERE pm.party_id = $1
                 """, party['party_id'])
+
+                # Check if location requires an equipped item - if so, verify all party members have it equipped
+                if location_details and location_details['required_item_id'] and location_details.get('required_item_equipped'):
+                    item_name = await self.bot.db.fetchval("""
+                        SELECT name FROM items WHERE itemid = $1
+                    """, location_details['required_item_id'])
+                    
+                    missing_members = []
+                    for member in party_members:
+                        has_item_equipped = await self.bot.db.fetchval("""
+                            SELECT COUNT(*) > 0
+                            FROM inventory
+                            WHERE playerid = $1 AND itemid = $2 AND isequipped = TRUE
+                        """, member['player_id'], location_details['required_item_id'])
+                        
+                        if not has_item_equipped:
+                            try:
+                                member_user = await self.bot.fetch_user(member['discord_id'])
+                                member_name = member_user.display_name if member_user else f"Player {member['player_id']}"
+                            except:
+                                member_name = f"Player {member['player_id']}"
+                            missing_members.append(member_name)
+                    
+                    if missing_members:
+                        member_list = ", ".join(missing_members)
+                        await ctx.send(
+                            f"❌ Cannot travel to **{location_details['name']}**! All party members must have **{item_name}** equipped.\n\n"
+                            f"Missing equipped item: {member_list}",
+                            ephemeral=True
+                        )
+                        return
 
                 # Update location for all party members
                 moved_count = 0

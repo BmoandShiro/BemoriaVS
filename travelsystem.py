@@ -135,6 +135,13 @@ class TravelSystem(Extension):
             await ctx.send("The specified location is not accessible or you do not meet the conditions required to travel there.", ephemeral=True)
             return
 
+        # Get location details to check requirements
+        location_details = await self.bot.db.fetchrow("""
+            SELECT locationid, name, required_item_id, required_item_equipped
+            FROM locations
+            WHERE locationid = $1
+        """, destination_location['locationid'])
+
         # Get all party members
         party_members = await self.bot.db.fetch("""
             SELECT pm.player_id, players.discord_id
@@ -146,6 +153,37 @@ class TravelSystem(Extension):
         if not party_members:
             await ctx.send("Error: Could not find party members.", ephemeral=True)
             return
+
+        # Check if location requires an equipped item - if so, verify all party members have it equipped
+        if location_details and location_details['required_item_id'] and location_details.get('required_item_equipped'):
+            item_name = await self.bot.db.fetchval("""
+                SELECT name FROM items WHERE itemid = $1
+            """, location_details['required_item_id'])
+            
+            missing_members = []
+            for member in party_members:
+                has_item_equipped = await self.bot.db.fetchval("""
+                    SELECT COUNT(*) > 0
+                    FROM inventory
+                    WHERE playerid = $1 AND itemid = $2 AND isequipped = TRUE
+                """, member['player_id'], location_details['required_item_id'])
+                
+                if not has_item_equipped:
+                    try:
+                        member_user = await self.bot.fetch_user(member['discord_id'])
+                        member_name = member_user.display_name if member_user else f"Player {member['player_id']}"
+                    except:
+                        member_name = f"Player {member['player_id']}"
+                    missing_members.append(member_name)
+            
+            if missing_members:
+                member_list = ", ".join(missing_members)
+                await ctx.send(
+                    f"❌ Cannot travel to **{location_details['name']}**! All party members must have **{item_name}** equipped.\n\n"
+                    f"Missing equipped item: {member_list}",
+                    ephemeral=True
+                )
+                return
 
         # Update location for all party members
         location_name = destination_location['name']
