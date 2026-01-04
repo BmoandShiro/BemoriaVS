@@ -556,6 +556,33 @@ class playerinterface(Extension):
         else:
             await ctx.send("You have not completed any quests yet.", ephemeral=True)
 
+    @component_callback(re.compile(r"^task_board_quest_[123]$"))
+    async def task_board_quest_handler(self, ctx: ComponentContext):
+        """Handle Task Board quest button clicks."""
+        # Extract quest number from custom_id (e.g., "task_board_quest_1" -> "1")
+        quest_num = ctx.custom_id.split("_")[-1]
+        
+        player_id = await self.bot.db.get_or_create_player(ctx.author.id)
+        
+        # Verify player is at Task Board location
+        player_location = await self.bot.db.fetchval("""
+            SELECT current_location FROM player_data WHERE playerid = $1
+        """, player_id)
+        
+        task_board_id = await self.bot.db.fetchval("""
+            SELECT locationid FROM locations WHERE name = 'Task Board'
+        """)
+        
+        if player_location != task_board_id:
+            await ctx.send("You must be at the Task Board to accept quests.", ephemeral=True)
+            return
+        
+        # Placeholder: Quest not implemented yet
+        await ctx.send(
+            f"Quest {quest_num} is not yet available. Check back soon!",
+            ephemeral=True
+        )
+
     @component_callback(re.compile(r"^travel_to_\d+$"))
     async def travel_to_button_handler(self, ctx: ComponentContext):
         original_user_id = int(ctx.custom_id.split("_")[2])
@@ -592,6 +619,7 @@ class playerinterface(Extension):
                 has_required_item = True
                 meets_xp = True
                 meets_skills = True
+                meets_quest = True
                 
                 if location.get('required_item_id'):
                     has_item = await self.bot.db.fetchval("""
@@ -603,6 +631,16 @@ class playerinterface(Extension):
                 
                 if location.get('xp_requirement') and player_data:
                     meets_xp = player_data['xp'] >= location['xp_requirement']
+                
+                # Check quest requirement
+                if location.get('required_quest_id'):
+                    quest_completed = await self.bot.db.fetchval("""
+                        SELECT EXISTS(
+                            SELECT 1 FROM player_quests
+                            WHERE player_id = $1 AND quest_id = $2 AND status = 'completed'
+                        )
+                    """, player_id, location['required_quest_id'])
+                    meets_quest = quest_completed if quest_completed is not None else False
                 
                 # Check skill requirements if needed
                 if player_data:
@@ -624,7 +662,7 @@ class playerinterface(Extension):
                     meets_skills = skill_check if skill_check is not None else True
                 
                 # Determine button style based on requirements
-                can_travel = has_required_item and meets_xp and meets_skills
+                can_travel = has_required_item and meets_xp and meets_skills and meets_quest
                 button_style = ButtonStyle.PRIMARY if can_travel else ButtonStyle.SECONDARY
                 
                 # Add indicator to label if requirements not met
@@ -632,6 +670,8 @@ class playerinterface(Extension):
                 if not can_travel:
                     if not has_required_item:
                         label = f"{location['name']} 🔒"
+                    elif not meets_quest:
+                        label = f"{location['name']} 📜"
                     elif not meets_xp:
                         label = f"{location['name']} ⚠️"
                 
@@ -679,7 +719,7 @@ class playerinterface(Extension):
         
         # Get location details
         location = await self.bot.db.fetchrow("""
-            SELECT locationid, name, required_item_id, xp_requirement
+            SELECT locationid, name, required_item_id, xp_requirement, required_quest_id
             FROM locations
             WHERE locationid = $1
         """, location_id)
@@ -751,6 +791,25 @@ class playerinterface(Extension):
                 ephemeral=True
             )
             return
+        
+        # Check quest requirement
+        if location['required_quest_id']:
+            quest_completed = await self.bot.db.fetchval("""
+                SELECT EXISTS(
+                    SELECT 1 FROM player_quests
+                    WHERE player_id = $1 AND quest_id = $2 AND status = 'completed'
+                )
+            """, player_id, location['required_quest_id'])
+            
+            if not quest_completed:
+                quest_name = await self.bot.db.fetchval("""
+                    SELECT name FROM quests WHERE quest_id = $1
+                """, location['required_quest_id'])
+                await ctx.send(
+                    f"You must complete the quest **{quest_name or 'a required quest'}** to travel to {location['name']}.",
+                    ephemeral=True
+                )
+                return
         
         # Check if player is in a party
         party = await self.bot.db.fetchrow("""
